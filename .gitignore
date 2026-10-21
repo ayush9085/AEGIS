@@ -11,8 +11,8 @@ venv/
 htmlcov/
 
 # Local evidence and device data — never commit by default
-evidence/
-reports/
+/evidence/
+/reports/
 *.adb-log
 *.device-dump
 .env
