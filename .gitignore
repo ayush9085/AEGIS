@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local evidence and device data — never commit by default
+evidence/
+reports/
+*.adb-log
+*.device-dump
+.env
+.env.*
+!.env.example
+
+.DS_Store
+.idea/
+.vscode/
