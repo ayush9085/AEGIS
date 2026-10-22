@@ -213,26 +213,106 @@ A content hash detects changes relative to the hashed representation; it does **
 
 ---
 
+---
+
+## Phase Three: Offline Firmware Intelligence Engine
+
+AEGIS Phase Three adds safe, offline, read-only static inspection of user-supplied Android firmware artifacts and partition images. It extracts header metadata, verifies container integrity, catalogues partition components, and generates deterministic, provenance-rich reports in terminal, JSON, and self-contained HTML formats.
+
+### Mission & Safety Boundaries
+
+AEGIS is strictly a reconnaissance and inspection toolkit. The firmware engine:
+* **Never flashes firmware or modifies device state**: All analysis is local and read-only.
+* **Never executes firmware binaries**: ELF executables, shell scripts, recovery installers, and partition binaries are never run.
+* **Never downloads or scrapes firmware**: AEGIS inspects only explicitly provided local files or directories.
+* **Does not claim OEM authenticity from hashes**: File SHA-256 hashes verify file integrity, not vendor cryptographic signatures or hardware trust.
+* **Distinguishes format detection from parser results**: Recognizing magic bytes does not imply successful structural parsing or format compliance.
+* **Does not conflate firmware metadata with live device state**: Firmware findings are held in distinct schemas (`FirmwareReport`, format `0.1.0`) and are never labeled as live physical device observations.
+
+---
+
+### Supported Formats & Capabilities
+
+| Format | Magic / Signature | Supported Scope | Exact Capabilities & Limitations |
+| :--- | :--- | :--- | :--- |
+| **Android Boot Image** | `ANDROID!` | Headers v0, v1, v2, v3, v4 | Extracts page size, kernel/ramdisk/second/recovery_dtbo/dtb sizes, kernel cmdline, and decodes AOSP `os_version` and `os_patch_level` bitfields. Validates declared offsets against actual file size. Does not extract compressed ramdisk payloads. |
+| **Vendor Boot Image** | `VNDRBOOT` | Headers v3, v4 | Extracts vendor ramdisk size, bootconfig size, page size, dtb size, vendor ramdisk table size, and cmdline. |
+| **Android Sparse Image** | `0xED26FF3A` | Major version 1 | Validates 28-byte sparse header, declared chunk count, block size, and sequentially validates chunk descriptors (`RAW`, `FILL`, `DONT_CARE`, `CRC32`). Verifies chunk boundaries without decompressing or expanding partitions to disk. |
+| **ZIP / OTA Archive** | `PK\x03\x04` | Standard ZIP32/ZIP64 | Inspects directory listings without uncompressing files. Enforces entry limits (max 50,000 entries), records total uncompressed size, detects duplicate names, and flags path traversal (`../`, absolute paths). Identifies Android components (`payload.bin`, `boot.img`, `super.img`, `vbmeta.img`) and boundedly extracts `META-INF/com/android/metadata`. |
+| **Android Build Properties** | `*.prop` text | Standard properties | Parses key-value pairs (e.g. `ro.product.model`, `ro.build.version.release`) with a 4KB per-line safety limit and maximum 256KB total size. |
+
+---
+
+### Resource Limits & Untrusted Input Safeguards
+
+* **Streaming SHA-256**: Hashes are computed via chunked 64KB reads, preventing high memory usage on large image files.
+* **Symlink Directory Escape Guard**: Recursive directory scans resolve absolute paths and reject symlinks pointing outside the target directory.
+* **Configurable File Size Ceilings**: Files exceeding `--max-size-mb` (default 2048 MB) are skipped with an `inaccessible` status.
+* **ZIP Bomb & Traversal Protection**: Archive inspection limits entry counts, tallies uncompressed bytes, and alerts on path traversal attempts.
+* **Zero Network Activity**: Operates completely offline with zero telemetry or remote calls.
+
+---
+
+### CLI Workflows & Examples
+
+#### 1. Inspect Firmware (Single Image or Directory)
+```bash
+# Terminal summary output
+./run.sh firmware inspect /path/to/boot.img
+
+# Structured JSON report output
+./run.sh firmware inspect /path/to/firmware_dir/ --format json --out firmware_reports/report.json
+
+# Interactive, self-contained HTML report
+./run.sh firmware inspect /path/to/ota_update.zip --format html --out firmware_reports/report.html
+```
+
+#### 2. Validate Firmware Report Integrity
+```bash
+# Validate schema version, summary counts, and required fields
+./run.sh firmware validate firmware_reports/report.json
+```
+
+#### 3. Render HTML Report from Existing JSON
+```bash
+# Generate self-contained HTML from a previously generated JSON report
+./run.sh firmware report firmware_reports/report.json --format html --out firmware_reports/report.html
+```
+
+#### 4. Interactive Menu
+Launch the interactive developer menu and select option `7) Inspect firmware artifact or directory`:
+```bash
+./run.sh
+```
+
+---
+
 ## Development & Testing
 
 Run all unit tests and linting locally:
 ```bash
-# Run test suite
+# Run complete test suite (127 automated tests)
 python3 -m pytest
 
 # Run Ruff linter
 python3 -m ruff check .
 ```
 
-All 102 automated tests run against synthetic and mocked fixtures without requiring a physical handset or live ADB daemon.
+All 127 automated tests run against synthetic fixtures and programmatic byte buffers without requiring a physical handset, live ADB daemon, or proprietary firmware dumps.
 
 ---
 
 ## Repository Map
 
 * `src/aegis/`: Core package containing CLI, ADB helpers, schema, snapshots, diff engine, and reporting engines.
-* `tests/`: Comprehensive test suites (102 tests) covering CLI, collectors, snapshots, diffs, schema, redaction, and HTML reports.
-* `docs/architecture.md`: Architectural design and subsystem breakdown.
+  * `src/aegis/firmware/`: Offline firmware intelligence package.
+    * `engine.py`: Coordinator for single-file and directory inventorying with symlink and size limits.
+    * `detector.py`: Conservative signature-based format sniffer.
+    * `models.py`: Versioned `FirmwareReport` schema (`0.1.0`), findings models, and validation logic.
+    * `parsers/`: Modular format parsers (`boot_img.py`, `sparse.py`, `zip_archive.py`, `props.py`).
+  * `src/aegis/reports/firmware_html.py`: Self-contained, responsive HTML reporter with strict XSS escaping.
+* `tests/`: Comprehensive test suites (127 tests) covering CLI, collectors, snapshots, diffs, firmware parsers, firmware engine, schema, redaction, and HTML reports.
+* `docs/architecture.md`: Architectural design, subsystems breakdown, and firmware engine dataflow.
 * `docs/threat-model.md`: Security boundary, threat analysis, and risk mitigations.
 * `docs/device-support.md`: Device compatibility matrix and research scope.
 * `docs/evidence-schema.md`: Data dictionary, schema versioning, and status vocabulary.
@@ -243,3 +323,4 @@ All 102 automated tests run against synthetic and mocked fixtures without requir
 ## License
 
 MIT. See [LICENSE](LICENSE).
+

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -15,8 +16,14 @@ from aegis import __version__
 from aegis.adb import find_adb, get_adb_version, list_devices
 from aegis.collectors.engine import collect_device_evidence, get_collection_plan
 from aegis.diff import IncomparableDeviceError, SemanticDiff, compare_snapshots
+from aegis.firmware.engine import inspect_firmware
+from aegis.firmware.models import (
+    FirmwareReport,
+    FirmwareReportError,
+)
 from aegis.redaction import redact_serial
 from aegis.reports.diff_html import render_html_diff_report
+from aegis.reports.firmware_html import render_html_firmware_report
 from aegis.reports.html import render_html_report
 from aegis.schema import EvidenceReport, validate_evidence_dict
 from aegis.snapshots import (
@@ -96,6 +103,9 @@ Quickstart examples:
   aegis snapshot               Create versioned snapshot with canonical SHA-256
   aegis diff snap1.json snap2.json  Compare two snapshots and display semantic diff
   aegis diff snap1.json snap2.json --format html --open  Render visual HTML diff report
+  aegis firmware inspect boot.img   Inspect Android boot image header & components
+  aegis firmware inspect ./ota/     Inspect firmware directory or OTA zip archive
+  aegis firmware report report.json --format html --open  Render visual HTML report
   aegis report                 Generate report for the most recent collection
   aegis demo --open            View a sample report with synthetic data (no phone needed)
         """,
@@ -261,6 +271,84 @@ Quickstart examples:
         action="store_true",
         default=True,
         help="Open the demo report in browser (default: true)",
+    )
+
+    # firmware
+    fw_parser = subparsers.add_parser(
+        "firmware",
+        help="Offline inspection and intelligence for firmware artifacts (boot.img, sparse, OTA zip)",
+    )
+    fw_subparsers = fw_parser.add_subparsers(
+        dest="firmware_command", help="Firmware analysis actions"
+    )
+
+    # firmware inspect
+    fw_inspect = fw_subparsers.add_parser(
+        "inspect", help="Inspect a firmware file or directory and emit a report"
+    )
+    fw_inspect.add_argument(
+        "target", metavar="PATH", help="Path to firmware file or directory"
+    )
+    fw_inspect.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Output report destination path (defaults to ./firmware_reports/report-<name>-<timestamp>.json)",
+    )
+    fw_inspect.add_argument(
+        "--format",
+        choices=["terminal", "json", "html"],
+        default="terminal",
+        help="Report output format (default: terminal)",
+    )
+    fw_inspect.add_argument(
+        "--max-size-mb",
+        type=int,
+        default=2048,
+        help="Maximum file size in MB to inspect (default: 2048 MB)",
+    )
+    fw_inspect.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite destination output file if it exists",
+    )
+    fw_inspect.add_argument(
+        "--open",
+        action="store_true",
+        help="Automatically open HTML report in browser",
+    )
+
+    # firmware validate
+    fw_validate = fw_subparsers.add_parser(
+        "validate", help="Validate a firmware report JSON document against schema"
+    )
+    fw_validate.add_argument(
+        "report_file", metavar="PATH", help="Path to firmware report JSON file"
+    )
+
+    # firmware report
+    fw_report = fw_subparsers.add_parser(
+        "report", help="Generate an HTML visual report from a firmware report JSON"
+    )
+    fw_report.add_argument(
+        "report_file", metavar="PATH", help="Path to firmware report JSON file"
+    )
+    fw_report.add_argument(
+        "--format",
+        choices=["html"],
+        default="html",
+        help="Report output format (default: html)",
+    )
+    fw_report.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Output HTML report file path (default: <report_dir>/report.html)",
+    )
+    fw_report.add_argument(
+        "--open",
+        action="store_true",
+        help="Automatically open HTML report in browser",
     )
 
     return parser
@@ -817,6 +905,207 @@ def handle_diff(
         return 0
 
 
+def print_terminal_firmware_report(report: FirmwareReport) -> None:
+    """Print structured, human-readable firmware report to terminal."""
+    r = report
+    s = r.summary
+    print(_bold("\n📦 AEGIS Firmware Intelligence Report"))
+    print("─" * 50)
+    print(f"  Target:     {r.target_name} ({r.target_type})")
+    print(f"  Analyzed:   {r.analyzed_at_utc}")
+    print(
+        f"  Findings:   {s.get('total_findings', 0)} ({s.get('observed', 0)} observed, {s.get('unsupported', 0)} unsupported, {s.get('error', 0)} error)"
+    )
+    print(f"  Artifacts:  {s.get('total_artifacts', 0)} inspected")
+    print("─" * 50)
+
+    if r.artifacts:
+        print(_bold("\nArtifact Inventory:"))
+        print(f"  {'PATH':<32} {'FORMAT':<24} {'SIZE':<12} {'PARSE STATUS':<12}")
+        print("  " + "-" * 82)
+        for art in r.artifacts[:20]:
+            size_str = f"{art.size_bytes // 1024} KB" if art.size_bytes >= 1024 else f"{art.size_bytes} B"
+            print(f"  {art.path[:30]:<32} {art.detected_format[:22]:<24} {size_str:<12} {art.parse_status:<12}")
+        if len(r.artifacts) > 20:
+            print(f"  ... and {len(r.artifacts) - 20} more artifacts.")
+
+    if r.findings:
+        print(_bold("\nKey Findings:"))
+        print(f"  {'KEY':<32} {'STATUS':<14} {'VALUE'}")
+        print("  " + "-" * 82)
+        for f in r.findings[:25]:
+            val_str = str(f.value)
+            if len(val_str) > 36:
+                val_str = val_str[:33] + "..."
+            print(f"  {f.key[:30]:<32} {f.status:<14} {val_str}")
+        if len(r.findings) > 25:
+            print(f"  ... and {len(r.findings) - 25} more findings.")
+
+    if r.warnings:
+        print(_yellow(f"\n⚠️  {len(r.warnings)} Warnings Detected:"))
+        for w in r.warnings[:5]:
+            print(_yellow(f"  • {w}"))
+        if len(r.warnings) > 5:
+            print(_yellow(f"  ... and {len(r.warnings) - 5} more warnings."))
+    print()
+
+
+def handle_firmware_inspect(
+    target: str,
+    out_path: str | None = None,
+    fmt: str = "terminal",
+    max_size_mb: int = 2048,
+    overwrite: bool = False,
+    open_report: bool = False,
+) -> int:
+    """Inspect firmware artifact and output report."""
+    target_path = Path(target)
+    if not target_path.exists():
+        print(_red(f"error: Target firmware path not found: {target}"), file=sys.stderr)
+        return 2
+
+    try:
+        report = inspect_firmware(target_path, max_file_size_mb=max_size_mb)
+    except (FirmwareReportError, OSError, ValueError, RuntimeError) as exc:
+        print(_red(f"error: Failed to inspect firmware: {exc}"), file=sys.stderr)
+        return 2
+
+    if fmt == "json":
+        if out_path:
+            dest = Path(out_path).resolve()
+        else:
+            ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in target_path.name)
+            dest = Path(f"./firmware_reports/report-{safe_name}-{ts}.json").resolve()
+
+        if dest.exists() and not overwrite:
+            print(
+                _red(f"error: Output destination '{dest}' already exists. Use --overwrite to replace."),
+                file=sys.stderr,
+            )
+            return 2
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
+        try:
+            temp_file.write_text(report.to_json(indent=2), encoding="utf-8")
+            temp_file.replace(dest)
+        except OSError as exc:
+            if temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            print(_red(f"error: Failed to write JSON report: {exc}"), file=sys.stderr)
+            return 2
+
+        print(_green(f"Firmware report written to: {dest}"))
+        return 0
+
+    elif fmt == "html":
+        if out_path:
+            dest = Path(out_path).resolve()
+        else:
+            ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in target_path.name)
+            dest = Path(f"./firmware_reports/report-{safe_name}-{ts}.html").resolve()
+
+        if dest.exists() and not overwrite:
+            print(
+                _red(f"error: Output destination '{dest}' already exists. Use --overwrite to replace."),
+                file=sys.stderr,
+            )
+            return 2
+
+        html_content = render_html_firmware_report(report)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
+        try:
+            temp_file.write_text(html_content, encoding="utf-8")
+            temp_file.replace(dest)
+        except OSError as exc:
+            if temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            print(_red(f"error: Failed to write HTML report: {exc}"), file=sys.stderr)
+            return 2
+
+        print(_green(f"\nHTML firmware report generated: {dest}"))
+        print(f"👉 View in browser: {_bold(f'open {dest}')}\n")
+        if open_report:
+            open_in_browser(dest)
+        return 0
+
+    else:  # terminal
+        print_terminal_firmware_report(report)
+        if out_path:
+            dest = Path(out_path).resolve()
+            if dest.exists() and not overwrite:
+                print(
+                    _red(f"error: Output destination '{dest}' already exists. Use --overwrite to replace."),
+                    file=sys.stderr,
+                )
+                return 2
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.suffix.lower() == ".html":
+                dest.write_text(render_html_firmware_report(report), encoding="utf-8")
+                print(_green(f"HTML report saved to: {dest}"))
+            else:
+                dest.write_text(report.to_json(indent=2), encoding="utf-8")
+                print(_green(f"JSON report saved to: {dest}"))
+        return 0
+
+
+def handle_firmware_validate(report_path: str) -> int:
+    """Validate a firmware report JSON document."""
+    path = Path(report_path)
+    if not path.is_file():
+        print(_red(f"error: Firmware report file not found: {path}"), file=sys.stderr)
+        return 2
+
+    try:
+        content = path.read_text(encoding="utf-8")
+        report = FirmwareReport.from_json(content)
+    except (FirmwareReportError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Firmware validation failed: {exc}"), file=sys.stderr)
+        return 2
+
+    print(_green(f"Validation passed: Valid AEGIS firmware report (v{report.schema_version})"))
+    print(
+        f"Target: {report.target_name} ({report.summary.get('total_artifacts', 0)} artifacts, {report.summary.get('total_findings', 0)} findings)"
+    )
+    return 0
+
+
+def handle_firmware_report(
+    report_path: str,
+    out_file: str | None = None,
+    open_report: bool = False,
+) -> int:
+    """Render HTML visual report from saved firmware JSON."""
+    path = Path(report_path)
+    if not path.is_file():
+        print(_red(f"error: Firmware report file not found: {path}"), file=sys.stderr)
+        return 2
+
+    try:
+        content = path.read_text(encoding="utf-8")
+        report = FirmwareReport.from_json(content)
+    except (FirmwareReportError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed to load firmware report: {exc}"), file=sys.stderr)
+        return 2
+
+    html_content = render_html_firmware_report(report)
+    if out_file:
+        dest = Path(out_file)
+    else:
+        dest = path.with_suffix(".html")
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(html_content, encoding="utf-8")
+    print(_green(f"Report successfully generated: {dest}"))
+    print(f"👉 View in browser: {_bold(f'open {dest}')}\n")
+    if open_report:
+        open_in_browser(dest)
+    return 0
+
+
 def handle_interactive_menu() -> int:
     """Present a friendly, guided menu for local developers."""
     show_menu = True
@@ -833,14 +1122,15 @@ def handle_interactive_menu() -> int:
             print(f"  [{_cyan('4')}] 🧪 {_bold('Preview demo report')}    - Explore report UI with sample data (no phone needed)")
             print(f"  [{_cyan('5')}] 📸 {_bold('Create snapshot')}       - Preserve evidence bundle into a versioned snapshot")
             print(f"  [{_cyan('6')}] ⚖️  {_bold('Compare snapshots')}     - Run deterministic semantic diff between two snapshots")
-            print(f"  [{_cyan('7')}] 📖 {_bold('Show command help')}     - View all commands, flags, and options")
+            print(f"  [{_cyan('7')}] 📦 {_bold('Inspect firmware')}      - Offline analysis of boot.img, sparse, OTA zip")
+            print(f"  [{_cyan('8')}] 📖 {_bold('Show command help')}     - View all commands, flags, and options")
             print(f"  [{_cyan('0')}] 🚪 {_dim('Exit')}\n")
 
         try:
             prompt = (
-                f"Enter choice [{_bold('1')}-7, or 0 to exit]: "
+                f"Enter choice [{_bold('1')}-8, or 0 to exit]: "
                 if show_menu
-                else f"Enter next choice [{_bold('1')}-7, or 0 to exit] (Enter for menu): "
+                else f"Enter next choice [{_bold('1')}-8, or 0 to exit] (Enter for menu): "
             )
             choice = input(prompt).strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -904,10 +1194,24 @@ def handle_interactive_menu() -> int:
                 print(_yellow("Both baseline and current snapshot paths are required."))
             show_menu = False
         elif choice == "7":
+            print(_bold("\n📦 Offline Firmware Inspection"))
+            print("Enter path to a boot.img, vendor_boot.img, sparse image, or OTA zip archive:")
+            try:
+                fw_in = input("Firmware artifact path: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nOperation cancelled.")
+                show_menu = False
+                continue
+            if fw_in:
+                handle_firmware_inspect(fw_in, fmt="terminal")
+            else:
+                print(_yellow("No firmware path provided."))
+            show_menu = False
+        elif choice == "8":
             build_parser().print_help()
             show_menu = False
         else:
-            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-7, or 0 to exit.\n"))
+            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-8, or 0 to exit.\n"))
             show_menu = True
 
         if not is_interactive:
@@ -960,6 +1264,28 @@ def main(argv: list[str] | None = None) -> int:
             open_report=args.open,
         )
 
+    if args.command == "firmware":
+        if not getattr(args, "firmware_command", None):
+            parser.parse_args(["firmware", "--help"])
+            return 0
+        if args.firmware_command == "inspect":
+            return handle_firmware_inspect(
+                target=args.target,
+                out_path=args.out,
+                fmt=args.format,
+                max_size_mb=args.max_size_mb,
+                overwrite=args.overwrite,
+                open_report=args.open,
+            )
+        if args.firmware_command == "validate":
+            return handle_firmware_validate(report_path=args.report_file)
+        if args.firmware_command == "report":
+            return handle_firmware_report(
+                report_path=args.report_file,
+                out_file=args.out,
+                open_report=args.open,
+            )
+
     if args.command == "report":
         return handle_report(
             evidence_path=args.evidence_file,
@@ -980,3 +1306,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
