@@ -453,6 +453,7 @@ rm -rf /tmp/aegis_clean_test
 * **[Security & Privacy Architecture](docs/security-and-privacy.md)**: Threat model, read-only guarantees, consent gating, identifier redaction, and safe input handling.
 * **[Evaluation Methodology](docs/evaluation-methodology.md)**: Scientific validation approach, metric formulations, ground-truth corpus, and threats to validity.
 * **[Release Engineering Guide](docs/releasing.md)**: Release checklist, versioning policy, artifact verification, and tagging procedure.
+* **[Real-Device Validation Report](docs/real-device-validation.md)**: Hardware audit, live 15/15 manual cross-check, and phase-by-phase evidence boundaries.
 * **[Evidence Schema Specification](docs/evidence-schema.md)**: JSON data dictionary, schema versioning, and controlled status vocabulary.
 * **[Device Support Matrix](docs/device-support.md)**: Tested handsets, platform tiers, and boundary conditions.
 * **[Changelog](CHANGELOG.md)**: Full milestone and release history across Phases 1 through 6.
