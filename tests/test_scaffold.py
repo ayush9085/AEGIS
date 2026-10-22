@@ -9,6 +9,8 @@ def test_parser_has_expected_commands():
     assert parser.parse_args(["collect", "--device", "mock-123", "--out", "./out"]).command == "collect"
     assert parser.parse_args(["report", "evidence.json"]).command == "report"
     assert parser.parse_args(["validate", "evidence.json"]).command == "validate"
+    assert parser.parse_args(["snapshot", "evidence.json"]).command == "snapshot"
+    assert parser.parse_args(["diff", "s1.json", "s2.json"]).command == "diff"
 
 
 def test_adb_device_model():

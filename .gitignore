@@ -13,6 +13,7 @@ htmlcov/
 # Local evidence and device data — never commit by default
 /evidence/
 /reports/
+/snapshots/
 *.adb-log
 *.device-dump
 .env

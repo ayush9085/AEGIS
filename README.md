@@ -8,17 +8,21 @@ AEGIS is an open-source, read-only-by-default toolkit for documenting Android de
 
 ---
 
-## Status: Phase One MVP
+## Status: Phase Two (Evidence Snapshots & Semantic Diffs)
 
-AEGIS Phase One is a working, tested command-line toolkit for safe Android device reconnaissance, schema-validated evidence collection, and self-contained HTML reporting.
+AEGIS Phase Two expands the toolkit with deterministic evidence snapshots, canonical SHA-256 hashing, integrity verification, pure semantic diffing, and self-contained HTML comparison reporting.
 
 ### Implemented Commands:
 * `aegis --help` / `aegis --version`: Display documentation and version info.
+* `aegis menu`: Launch guided developer launcher with quick actions.
 * `aegis doctor`: Verify host operating system, Python runtime, and Android Debug Bridge (ADB) installation.
 * `aegis devices`: Enumerate attached ADB devices with status diagnostics (handling authorized, unauthorized, and offline states).
-* `aegis collect --device <serial> --out <dir>`: Execute bounded, read-only, consent-gated allowlist probes and output `evidence.json`.
-* `aegis report <path/to/evidence.json> --format html [--out <file>]`: Render a self-contained, accessible HTML report with zero external CDN dependencies and full XSS mitigation.
-* `aegis validate <path/to/evidence.json>`: Verify an evidence JSON document against the schema specification.
+* `aegis collect` / `aegis scan`: Execute bounded, read-only, consent-gated allowlist probes and output `evidence.json`.
+* `aegis snapshot <evidence.json> [--out <file>]`: Create a versioned, canonical evidence snapshot with cryptographic content hash.
+* `aegis diff <snap1.json> <snap2.json> [--format terminal|json|html]`: Compare two evidence snapshots deterministically and identify changed observations.
+* `aegis report <evidence.json> [--out <file>]`: Render a self-contained, accessible HTML single-collection report.
+* `aegis validate <evidence.json>`: Verify an evidence JSON document against the schema specification.
+* `aegis demo`: Generate a sample evidence report using synthetic data without a phone.
 
 ---
 
@@ -150,6 +154,65 @@ AEGIS Phase One queries only documented, unprivileged properties:
 
 ---
 
+## Phase Two: Evidence Snapshots & Semantic Diffs
+
+AEGIS Phase Two enables saving immutable, versioned observation snapshots and performing deterministic, offline semantic comparisons across collection points (e.g. before and after an OEM system update, or during security baseline drift tracking).
+
+### Core Concepts
+
+#### 1. What is an Evidence Snapshot?
+An Evidence Snapshot (`EvidenceSnapshot`, format version `0.1.0`) is a standalone, versioned JSON envelope wrapping canonical observation records and sanitized device metadata. Snapshots can be archived, transferred, and compared offline without ADB or phone connectivity.
+
+#### 2. Canonical SHA-256 Content Hash
+To ensure byte-for-byte reproducibility and tamper resistance:
+* **Canonical Serialization**: JSON is serialized with deterministic key ordering (`sort_keys=True`), compact separators (`,`, `:`), and UTF-8 encoding (`ensure_ascii=False`).
+* **Cryptographic Hash Input**: SHA-256 is computed over the canonical evidence payload:
+  * **Included**: `source_schema_version`, provenance flag (`is_synthetic`), sanitized device identities (`serial_redacted`, `manufacturer`, `model`, `product_name`, `android_version`, `sdk_version`, `security_patch`, `build_id`, `fingerprint`), and all observation records (`key`, `status`, `value`, `raw_value`, `error`, `redacted`). Observations are deterministically sorted by `key`.
+  * **Excluded**: Ephemeral envelope metadata (e.g. `created_at_utc`, collection host OS/Python/ADB versions, file paths, user notes). This guarantees that the exact same observed device state receives the identical content hash regardless of when or where the snapshot file was generated.
+* **Integrity Verification**: When loading any snapshot, AEGIS recomputes the content hash and verifies it against the recorded `content_hash`. Tampered, corrupted, or altered files are rejected with a clear `SnapshotIntegrityError`.
+
+#### 3. Pure Semantic Diff Engine
+The diff engine (`compare_snapshots`) operates offline without ADB or network access:
+* **Observation Classifications**:
+  * `unchanged`: Observation key exists in both snapshots with identical status and value.
+  * `value_changed`: Same key and comparable statuses, but observed property value changed.
+  * `status_changed`: Observation status changed (e.g. `observed` -> `inaccessible` or `unsupported` -> `observed`).
+  * `added`: Observation exists only in current snapshot.
+  * `removed`: Observation exists only in baseline snapshot.
+  * `incomparable`: Semantic comparison cannot be interpreted reliably.
+* **Status Vocabulary**: Handles `observed`, `unsupported`, `inaccessible`, `not_applicable`, `unknown`, and `error` transitions faithfully without inventing security interpretations.
+* **Device Comparability Safeguards**:
+  * Different physical devices or conflicting models/serials are blocked by default (`IncomparableDeviceError`) to prevent misattributing differences between two distinct handsets as state changes.
+  * Synthetic fixture data is strictly distinguished from live physical handset evidence; synthetic vs physical comparisons are rejected by default.
+  * Missing identity information is classified as `identity_unverified` rather than assumed to match.
+  * A research override (`--allow-different-devices`) is provided for cross-OEM analysis, prominently marked with warning banners in terminal and HTML reports.
+
+#### 4. Limitation & Integrity Notice
+A content hash detects changes relative to the hashed representation; it does **not** establish that the source evidence was truthful or that the snapshot was signed by a trusted authority. AEGIS reads userspace properties exposed over ADB and does **not** provide hardware-backed attestation or bootloader cryptographic validation.
+
+---
+
+### Phase 2 Workflow Example (Offline Synthetic Smoke Test)
+
+```bash
+# 1. Create baseline snapshot from sample evidence
+./run.sh snapshot tests/fixtures/sample_evidence.json --out snapshots/baseline.json
+
+# 2. Create updated snapshot from post-update evidence
+./run.sh snapshot tests/fixtures/sample_evidence_updated.json --out snapshots/updated.json
+
+# 3. Perform semantic diff in terminal
+./run.sh diff snapshots/baseline.json snapshots/updated.json
+
+# 4. Export machine-readable JSON diff
+./run.sh diff snapshots/baseline.json snapshots/updated.json --format json --out reports/diff.json
+
+# 5. Generate self-contained HTML visual comparison report
+./run.sh diff snapshots/baseline.json snapshots/updated.json --format html --out reports/diff.html
+```
+
+---
+
 ## Development & Testing
 
 Run all unit tests and linting locally:
@@ -161,22 +224,22 @@ python3 -m pytest
 python3 -m ruff check .
 ```
 
-All 59 unit tests run against synthetic and mocked fixtures without requiring a physical handset or ADB daemon.
+All 102 automated tests run against synthetic and mocked fixtures without requiring a physical handset or live ADB daemon.
 
 ---
 
 ## Repository Map
 
-* [src/aegis/](file:///Users/ayush9085/Documents/AEGIS/src/aegis): Core package containing CLI, ADB helpers, schema, redaction, collectors, and reporting engines.
-* [tests/](file:///Users/ayush9085/Documents/AEGIS/tests): Unit and integration test suites with synthetic fixtures.
-* [docs/architecture.md](file:///Users/ayush9085/Documents/AEGIS/docs/architecture.md): Architectural design and subsystem breakdown.
-* [docs/threat-model.md](file:///Users/ayush9085/Documents/AEGIS/docs/threat-model.md): Security boundary, threat analysis, and risk mitigations.
-* [docs/device-support.md](file:///Users/ayush9085/Documents/AEGIS/docs/device-support.md): Device compatibility matrix and research scope.
-* [docs/evidence-schema.md](file:///Users/ayush9085/Documents/AEGIS/docs/evidence-schema.md): Data dictionary, schema versioning, and status vocabulary.
-* [docs/phase-one-validation.md](file:///Users/ayush9085/Documents/AEGIS/docs/phase-one-validation.md): Detailed verification report and command audit log.
+* `src/aegis/`: Core package containing CLI, ADB helpers, schema, snapshots, diff engine, and reporting engines.
+* `tests/`: Comprehensive test suites (102 tests) covering CLI, collectors, snapshots, diffs, schema, redaction, and HTML reports.
+* `docs/architecture.md`: Architectural design and subsystem breakdown.
+* `docs/threat-model.md`: Security boundary, threat analysis, and risk mitigations.
+* `docs/device-support.md`: Device compatibility matrix and research scope.
+* `docs/evidence-schema.md`: Data dictionary, schema versioning, and status vocabulary.
+* `docs/phase-one-validation.md`: Phase 1 verification report and command audit log.
 
 ---
 
 ## License
 
-MIT. See [LICENSE](file:///Users/ayush9085/Documents/AEGIS/LICENSE).
+MIT. See [LICENSE](LICENSE).

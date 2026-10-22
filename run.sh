@@ -33,6 +33,8 @@ Core Commands:
   collect [serial]    Collect evidence (auto-detects phone if only 1 is connected)
   devices             List connected phones and check authorization status
   doctor              Check host setup, Python, and Android Platform Tools (ADB)
+  snapshot [file]     Create versioned snapshot with canonical SHA-256 hash
+  diff <snap1> <snap2> Run deterministic semantic diff between two snapshots
   demo                Preview a sample report with synthetic data (no phone needed)
   report [file.json]  Generate HTML report (defaults to your latest collection)
   validate [file]     Check evidence JSON against the schema
@@ -43,6 +45,8 @@ Core Commands:
 Examples:
   ./run.sh                      # Launch guided interactive menu
   ./run.sh scan                 # One-step collection and report viewing
+  ./run.sh snapshot             # Save snapshot from latest evidence
+  ./run.sh diff snap1.json snap2.json # Compare two snapshots
   ./run.sh doctor               # Check your ADB setup
   ./run.sh demo                 # Explore report UI without any phone
 
@@ -86,6 +90,12 @@ case "${COMMAND}" in
             # Auto-detect connected device
             "${AEGIS_CMD[@]}" collect "${@:2}"
         fi
+        ;;
+    snapshot)
+        "${AEGIS_CMD[@]}" snapshot "${@:2}"
+        ;;
+    diff)
+        "${AEGIS_CMD[@]}" diff "${@:2}"
         ;;
     report)
         EVIDENCE="${2:-}"

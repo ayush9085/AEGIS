@@ -296,3 +296,132 @@ def test_cli_collect_with_explicit_serial_when_adb_missing_on_host(capsys):
         assert "Target Handset:" in captured.out
         assert "Collection aborted by user." in captured.err
 
+
+def test_cli_snapshot_success_and_overwrite(tmp_path, capsys):
+    sample_file = FIXTURES_DIR / "sample_evidence.json"
+    snap_out = tmp_path / "baseline_snap.json"
+
+    # 1. Create snapshot
+    ret = main(["snapshot", str(sample_file), "--out", str(snap_out), "--label", "Baseline"])
+    assert ret == 0
+    captured = capsys.readouterr()
+    assert "Snapshot created successfully!" in captured.out
+    assert "Content Hash:" in captured.out
+    assert snap_out.is_file()
+
+    # 2. Refuse overwrite without --overwrite
+    ret2 = main(["snapshot", str(sample_file), "--out", str(snap_out)])
+    assert ret2 == 2
+    captured2 = capsys.readouterr()
+    assert "already exists. Use overwrite option" in captured2.err
+
+    # 3. Overwrite with --overwrite
+    ret3 = main(["snapshot", str(sample_file), "--out", str(snap_out), "--overwrite"])
+    assert ret3 == 0
+    captured3 = capsys.readouterr()
+    assert "Snapshot created successfully!" in captured3.out
+
+
+def test_cli_snapshot_missing_or_corrupt_file(tmp_path, capsys):
+    # Missing file
+    ret = main(["snapshot", "nonexistent.json"])
+    assert ret == 2
+    captured = capsys.readouterr()
+    assert "error: Evidence file not found" in captured.err
+
+    # Corrupt file
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("{invalid_json", encoding="utf-8")
+    ret2 = main(["snapshot", str(bad_file)])
+    assert ret2 == 2
+    captured2 = capsys.readouterr()
+    assert "error: Failed to load evidence" in captured2.err
+
+
+def test_cli_diff_terminal_and_formats(tmp_path, capsys):
+    sample_file1 = FIXTURES_DIR / "sample_evidence.json"
+    sample_file2 = FIXTURES_DIR / "sample_evidence_updated.json"
+
+    snap1 = tmp_path / "snap1.json"
+    snap2 = tmp_path / "snap2.json"
+    main(["snapshot", str(sample_file1), "--out", str(snap1)])
+    main(["snapshot", str(sample_file2), "--out", str(snap2)])
+    capsys.readouterr()  # flush output
+
+    # 1. Terminal diff
+    ret = main(["diff", str(snap1), str(snap2)])
+    assert ret == 0
+    captured = capsys.readouterr()
+    assert "AEGIS Semantic Snapshot Comparison" in captured.out
+    assert "Status:" in captured.out
+    assert "build.version.release" in captured.out
+
+    # 2. JSON diff
+    diff_json_out = tmp_path / "diff.json"
+    ret_json = main(["diff", str(snap1), str(snap2), "--format", "json", "--out", str(diff_json_out)])
+    assert ret_json == 0
+    assert diff_json_out.is_file()
+    loaded_diff = json.loads(diff_json_out.read_text(encoding="utf-8"))
+    assert loaded_diff["diff_version"] == "0.1.0"
+    assert loaded_diff["summary"]["value_changed"] > 0
+
+    # 3. HTML diff
+    diff_html_out = tmp_path / "diff.html"
+    ret_html = main(["diff", str(snap1), str(snap2), "--format", "html", "--out", str(diff_html_out)])
+    assert ret_html == 0
+    assert diff_html_out.is_file()
+    html_text = diff_html_out.read_text(encoding="utf-8")
+    assert "<!DOCTYPE html>" in html_text
+    assert "AEGIS Semantic Diff Report" in html_text
+
+
+def test_cli_diff_cross_device_blocked_and_override(tmp_path, capsys):
+    sample_file1 = FIXTURES_DIR / "sample_evidence.json"
+    snap1 = tmp_path / "snap1.json"
+    main(["snapshot", str(sample_file1), "--out", str(snap1)])
+
+    # Create snap2 with different model
+    from aegis.schema import EvidenceReport
+    from aegis.snapshots import create_snapshot_from_evidence, save_snapshot
+    ev = EvidenceReport.from_json(sample_file1.read_text(encoding="utf-8"))
+    ev_dict = ev.to_dict()
+    ev_dict["device"]["model"] = "DifferentPhone"
+    ev_diff = EvidenceReport.from_dict(ev_dict)
+    snap2 = tmp_path / "snap2.json"
+    save_snapshot(create_snapshot_from_evidence(ev_diff), snap2)
+    capsys.readouterr()
+
+    # Diff blocked by default
+    ret_blocked = main(["diff", str(snap1), str(snap2)])
+    assert ret_blocked == 2
+    captured = capsys.readouterr()
+    assert "Cannot compare snapshots from different devices" in captured.err
+
+    # Allowed with flag
+    ret_allowed = main(["diff", str(snap1), str(snap2), "--allow-different-devices"])
+    assert ret_allowed == 0
+    captured_allowed = capsys.readouterr()
+    assert "AEGIS Semantic Snapshot Comparison" in captured_allowed.out
+    assert "Cross-device comparison override is ACTIVE" in captured_allowed.out
+
+
+def test_cli_diff_integrity_tamper_detection(tmp_path, capsys):
+    sample_file = FIXTURES_DIR / "sample_evidence.json"
+    snap1 = tmp_path / "snap1.json"
+    snap2 = tmp_path / "snap2.json"
+    main(["snapshot", str(sample_file), "--out", str(snap1)])
+    main(["snapshot", str(sample_file), "--out", str(snap2)])
+    capsys.readouterr()
+
+    # Tamper with snap2 content without updating hash
+    snap_data = json.loads(snap2.read_text(encoding="utf-8"))
+    snap_data["device"]["model"] = "TamperedModel"
+    snap2.write_text(json.dumps(snap_data), encoding="utf-8")
+
+    ret = main(["diff", str(snap1), str(snap2)])
+    assert ret == 2
+    captured = capsys.readouterr()
+    assert "Snapshot integrity verification failed" in captured.err
+
+
+

@@ -14,9 +14,17 @@ from pathlib import Path
 from aegis import __version__
 from aegis.adb import find_adb, get_adb_version, list_devices
 from aegis.collectors.engine import collect_device_evidence, get_collection_plan
+from aegis.diff import IncomparableDeviceError, SemanticDiff, compare_snapshots
 from aegis.redaction import redact_serial
+from aegis.reports.diff_html import render_html_diff_report
 from aegis.reports.html import render_html_report
 from aegis.schema import EvidenceReport, validate_evidence_dict
+from aegis.snapshots import (
+    SnapshotError,
+    create_snapshot,
+    load_snapshot,
+    save_snapshot,
+)
 
 
 def _color(text: str, code: str) -> str:
@@ -77,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Construct the command-line argument parser for AEGIS."""
     parser = argparse.ArgumentParser(
         prog="aegis",
-        description="AEGIS: Android Exploration, Guardrails, Intelligence & Security (Phase One MVP)",
+        description="AEGIS: Android Exploration, Guardrails, Intelligence & Security",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Quickstart examples:
@@ -85,6 +93,9 @@ Quickstart examples:
   aegis devices                List connected Android devices
   aegis collect                Auto-detect phone, collect evidence, & render report
   aegis collect --open         Collect and immediately open the HTML report in browser
+  aegis snapshot               Create versioned snapshot with canonical SHA-256
+  aegis diff snap1.json snap2.json  Compare two snapshots and display semantic diff
+  aegis diff snap1.json snap2.json --format html --open  Render visual HTML diff report
   aegis report                 Generate report for the most recent collection
   aegis demo --open            View a sample report with synthetic data (no phone needed)
         """,
@@ -129,6 +140,75 @@ Quickstart examples:
         "--open",
         action="store_true",
         help="Automatically open the generated HTML report in your browser",
+    )
+
+    # snapshot
+    snap_parser = subparsers.add_parser(
+        "snapshot",
+        help="Create a versioned evidence snapshot with canonical SHA-256 hash",
+    )
+    snap_parser.add_argument(
+        "evidence_file",
+        nargs="?",
+        default=None,
+        metavar="PATH",
+        help="Path to evidence.json (optional; defaults to most recent collection)",
+    )
+    snap_parser.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Destination snapshot file path (defaults to ./snapshots/snapshot-<tag>-<timestamp>.json)",
+    )
+    snap_parser.add_argument(
+        "--notes",
+        "--label",
+        metavar="TEXT",
+        default=None,
+        help="Optional descriptive label/note to record in snapshot metadata",
+    )
+    snap_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite destination snapshot file if it already exists",
+    )
+
+    # diff
+    diff_parser = subparsers.add_parser(
+        "diff",
+        help="Perform deterministic semantic diff between two evidence snapshots",
+    )
+    diff_parser.add_argument(
+        "baseline",
+        metavar="BASELINE",
+        help="Path to baseline snapshot JSON file",
+    )
+    diff_parser.add_argument(
+        "current",
+        metavar="CURRENT",
+        help="Path to current snapshot JSON file",
+    )
+    diff_parser.add_argument(
+        "--format",
+        choices=["terminal", "json", "html"],
+        default="terminal",
+        help="Diff output format (default: terminal)",
+    )
+    diff_parser.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Output destination path for JSON or HTML diff report",
+    )
+    diff_parser.add_argument(
+        "--allow-different-devices",
+        action="store_true",
+        help="Explicitly permit comparison across different devices or synthetic vs physical data",
+    )
+    diff_parser.add_argument(
+        "--open",
+        action="store_true",
+        help="Automatically open generated HTML diff report in your browser",
     )
 
     # report
@@ -536,6 +616,207 @@ def handle_demo(open_report: bool = True) -> int:
     return 0
 
 
+def handle_snapshot(
+    evidence_path: str | None,
+    out_path: str | None,
+    notes: str | None = None,
+    overwrite: bool = False,
+) -> int:
+    """Create a versioned snapshot from an evidence JSON bundle."""
+    if not evidence_path:
+        latest = find_latest_evidence()
+        if not latest:
+            print(_red("error: No evidence.json found. Run 'aegis collect' first or specify a path."), file=sys.stderr)
+            return 2
+        ev_file = latest
+        print(_dim(f"Auto-selected latest evidence: {ev_file}"))
+    else:
+        ev_file = Path(evidence_path)
+
+    if not ev_file.is_file():
+        print(_red(f"error: Evidence file not found: {ev_file}"), file=sys.stderr)
+        return 2
+
+    try:
+        content = ev_file.read_text(encoding="utf-8")
+        report = EvidenceReport.from_json(content)
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed to load evidence bundle: {exc}"), file=sys.stderr)
+        return 2
+
+    snapshot = create_snapshot(report, notes=notes)
+
+    if not out_path:
+        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        safe_tag = (report.device.serial_redacted or "snapshot").replace("*", "")[:6]
+        dest_path = Path(f"./snapshots/snapshot-{safe_tag}-{ts}.json")
+    else:
+        dest_path = Path(out_path)
+
+    try:
+        saved_file = save_snapshot(snapshot, dest_path, overwrite=overwrite)
+    except FileExistsError as exc:
+        print(_red(f"error: {exc}"), file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(_red(f"error: Failed to write snapshot file: {exc}"), file=sys.stderr)
+        return 2
+
+    print(_green("\n📸 Snapshot created successfully!"))
+    print(_dim("──────────────────────────────────────────────────"))
+    dev_str = f"{report.device.manufacturer or ''} {report.device.model or ''}".strip() or "Unknown Handset"
+    prov_str = "🧪 Synthetic Demo Data" if snapshot.provenance.get("is_synthetic") else "📱 Physical Handset"
+    print(f"  Snapshot ID:   {_cyan(snapshot.snapshot_id)}")
+    print(f"  Content Hash:  {_cyan(snapshot.content_hash)}")
+    print(f"  Format:        v{snapshot.snapshot_format_version} (Source Schema v{snapshot.source_schema_version})")
+    print(f"  Device:        {_bold(dev_str)}")
+    print(f"  Provenance:    {prov_str}")
+    print(f"  Observations:  {len(snapshot.observations)} records")
+    print(f"  Saved Path:    {_cyan(str(saved_file))}")
+    print(_dim("──────────────────────────────────────────────────\n"))
+    return 0
+
+
+def print_terminal_diff(diff: SemanticDiff) -> None:
+    """Print clean, human-readable terminal summary of snapshot diff."""
+    d = diff
+    s = d.summary
+
+    print(_bold("\n⚖️  AEGIS Semantic Snapshot Comparison"))
+    print(_dim("──────────────────────────────────────────────────"))
+    b_name = f"{d.baseline_device.get('manufacturer', '')} {d.baseline_device.get('model', '')}".strip() or "Device A"
+    c_name = f"{d.current_device.get('manufacturer', '')} {d.current_device.get('model', '')}".strip() or "Device B"
+    b_prov = "🧪 synthetic" if d.baseline_is_synthetic else "📱 physical"
+    c_prov = "🧪 synthetic" if d.current_is_synthetic else "📱 physical"
+
+    print(f"  Baseline:  {_cyan(d.baseline_id)} ({b_name}, {b_prov})")
+    print(f"             Hash: {_dim(d.baseline_hash)}")
+    print(f"  Current:   {_cyan(d.current_id)} ({c_name}, {c_prov})")
+    print(f"             Hash: {_dim(d.current_hash)}")
+    print(f"  Status:    {_bold(d.comparability_state.replace('_', ' ').upper())}")
+
+    if d.is_cross_device_override:
+        print(_yellow("  ⚠️  Notice: Cross-device comparison override is ACTIVE."))
+    elif d.comparability_state == "identity_unverified":
+        print(_yellow("  ⚠️  Notice: Device identity unverified (comparing observation keys)."))
+
+    print(_dim("──────────────────────────────────────────────────"))
+    print(
+        f"  Findings:  {_green(f'{s.unchanged} unchanged')}, "
+        f"{_cyan(f'{s.value_changed} value changed')}, "
+        f"{_yellow(f'{s.status_changed} status changed')}, "
+        f"{_green(f'{s.added} added')}, "
+        f"{_red(f'{s.removed} removed')}"
+    )
+    print(_dim("──────────────────────────────────────────────────"))
+
+    total_changes = s.value_changed + s.status_changed + s.added + s.removed + s.incomparable
+    if total_changes == 0:
+        print(_green("\n✅ Snapshots are identical — zero observation differences found.\n"))
+        return
+
+    print(_bold("\nChanged Observations:"))
+    print(f"  {'KEY':<30} {'CHANGE':<16} {'TRANSITION'}")
+    print("  " + "-" * 70)
+    for c in d.changes:
+        if c.classification == "unchanged":
+            continue
+        c_tag = c.classification.upper()
+        if c.classification == "value_changed":
+            trans = f"'{c.old_value}' -> '{c.new_value}'"
+            tag_colored = _cyan(c_tag)
+        elif c.classification == "status_changed":
+            trans = f"{c.old_status} -> {c.new_status} (val: '{c.new_value}')"
+            tag_colored = _yellow(c_tag)
+        elif c.classification == "added":
+            trans = f"added with status '{c.new_status}', val '{c.new_value}'"
+            tag_colored = _green(c_tag)
+        elif c.classification == "removed":
+            trans = f"removed (was status '{c.old_status}')"
+            tag_colored = _red(c_tag)
+        else:
+            trans = c.explanation
+            tag_colored = c_tag
+
+        print(f"  {c.key:<30} {tag_colored:<25} {trans}")
+    print()
+
+
+def handle_diff(
+    baseline_path: str,
+    current_path: str,
+    fmt: str = "terminal",
+    out_path: str | None = None,
+    allow_different_devices: bool = False,
+    open_report: bool = False,
+) -> int:
+    """Compare two snapshots and output deterministic semantic differences."""
+    b_file = Path(baseline_path)
+    c_file = Path(current_path)
+
+    if not b_file.is_file():
+        print(_red(f"error: Baseline snapshot not found: {b_file}"), file=sys.stderr)
+        return 2
+    if not c_file.is_file():
+        print(_red(f"error: Current snapshot not found: {c_file}"), file=sys.stderr)
+        return 2
+
+    # Load baseline
+    try:
+        baseline_snap = load_snapshot(b_file, verify_integrity=True)
+    except (SnapshotError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed loading baseline snapshot: {exc}"), file=sys.stderr)
+        return 2
+
+    # Load current
+    try:
+        current_snap = load_snapshot(c_file, verify_integrity=True)
+    except (SnapshotError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed loading current snapshot: {exc}"), file=sys.stderr)
+        return 2
+
+    # Run semantic diff
+    try:
+        diff_res = compare_snapshots(
+            baseline=baseline_snap,
+            current=current_snap,
+            allow_different_devices=allow_different_devices,
+        )
+    except IncomparableDeviceError as exc:
+        print(_red(f"error: {exc}"), file=sys.stderr)
+        return 2
+
+    if fmt == "json":
+        json_str = diff_res.to_json(indent=2)
+        if out_path:
+            dest = Path(out_path)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json_str, encoding="utf-8")
+            print(_green(f"JSON diff written to: {dest}"))
+        else:
+            print(json_str)
+        return 0
+
+    elif fmt == "html":
+        html_content = render_html_diff_report(diff_res)
+        if not out_path:
+            ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            dest = Path(f"./reports/diff-{ts}.html")
+        else:
+            dest = Path(out_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(html_content, encoding="utf-8")
+        print(_green(f"\nHTML diff report generated: {dest}"))
+        print(f"👉 View in browser: {_bold(f'open {dest}')}\n")
+        if open_report:
+            open_in_browser(dest)
+        return 0
+
+    else:
+        print_terminal_diff(diff_res)
+        return 0
+
+
 def handle_interactive_menu() -> int:
     """Present a friendly, guided menu for local developers."""
     show_menu = True
@@ -550,14 +831,16 @@ def handle_interactive_menu() -> int:
             print(f"  [{_cyan('2')}] 📱 {_bold('List connected devices')} - See connected phones and authorization status")
             print(f"  [{_cyan('3')}] 🩺 {_bold('Run environment doctor')} - Check ADB, Python, and system prerequisites")
             print(f"  [{_cyan('4')}] 🧪 {_bold('Preview demo report')}    - Explore report UI with sample data (no phone needed)")
-            print(f"  [{_cyan('5')}] 📖 {_bold('Show command help')}     - View all commands, flags, and options")
+            print(f"  [{_cyan('5')}] 📸 {_bold('Create snapshot')}       - Preserve evidence bundle into a versioned snapshot")
+            print(f"  [{_cyan('6')}] ⚖️  {_bold('Compare snapshots')}     - Run deterministic semantic diff between two snapshots")
+            print(f"  [{_cyan('7')}] 📖 {_bold('Show command help')}     - View all commands, flags, and options")
             print(f"  [{_cyan('0')}] 🚪 {_dim('Exit')}\n")
 
         try:
             prompt = (
-                f"Enter choice [{_bold('1')}-5, or 0 to exit]: "
+                f"Enter choice [{_bold('1')}-7, or 0 to exit]: "
                 if show_menu
-                else f"Enter next choice [{_bold('1')}-5, or 0 to exit] (Enter for menu): "
+                else f"Enter next choice [{_bold('1')}-7, or 0 to exit] (Enter for menu): "
             )
             choice = input(prompt).strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -586,10 +869,45 @@ def handle_interactive_menu() -> int:
             handle_demo(open_report=True)
             show_menu = False
         elif choice == "5":
+            handle_snapshot(evidence_path=None, out_path=None, notes=None, overwrite=False)
+            show_menu = False
+        elif choice == "6":
+            print(_bold("\n⚖️  Compare Evidence Snapshots"))
+            print("Enter paths to two snapshot JSON files (or press Enter for demo comparison):")
+            try:
+                b_in = input("Baseline snapshot path [demo baseline]: ").strip()
+                c_in = input("Current snapshot path  [demo updated]:  ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nOperation cancelled.")
+                show_menu = False
+                continue
+
+            if not b_in and not c_in:
+                b_ev = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "sample_evidence.json"
+                c_ev = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "sample_evidence_updated.json"
+                if not b_ev.is_file():
+                    b_ev = Path("./tests/fixtures/sample_evidence.json")
+                    c_ev = Path("./tests/fixtures/sample_evidence_updated.json")
+                if b_ev.is_file() and c_ev.is_file():
+                    demo_b_snap = create_snapshot(EvidenceReport.from_json(b_ev.read_text(encoding="utf-8")), notes="Baseline synthetic")
+                    demo_c_snap = create_snapshot(EvidenceReport.from_json(c_ev.read_text(encoding="utf-8")), notes="Updated synthetic")
+                    demo_dir = Path("./snapshots/demo")
+                    demo_dir.mkdir(parents=True, exist_ok=True)
+                    b_file = save_snapshot(demo_b_snap, demo_dir / "baseline.json", overwrite=True)
+                    c_file = save_snapshot(demo_c_snap, demo_dir / "updated.json", overwrite=True)
+                    handle_diff(str(b_file), str(c_file), fmt="terminal")
+                else:
+                    print(_yellow("Demo fixtures not found."))
+            elif b_in and c_in:
+                handle_diff(b_in, c_in, fmt="terminal")
+            else:
+                print(_yellow("Both baseline and current snapshot paths are required."))
+            show_menu = False
+        elif choice == "7":
             build_parser().print_help()
             show_menu = False
         else:
-            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-5, or 0 to exit.\n"))
+            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-7, or 0 to exit.\n"))
             show_menu = True
 
         if not is_interactive:
@@ -621,6 +939,24 @@ def main(argv: list[str] | None = None) -> int:
             device_serial=args.device,
             out_dir=args.out,
             non_interactive=args.yes,
+            open_report=args.open,
+        )
+
+    if args.command == "snapshot":
+        return handle_snapshot(
+            evidence_path=args.evidence_file,
+            out_path=args.out,
+            notes=args.notes,
+            overwrite=args.overwrite,
+        )
+
+    if args.command == "diff":
+        return handle_diff(
+            baseline_path=args.baseline,
+            current_path=args.current,
+            fmt=args.format,
+            out_path=args.out,
+            allow_different_devices=args.allow_different_devices,
             open_report=args.open,
         )
 
