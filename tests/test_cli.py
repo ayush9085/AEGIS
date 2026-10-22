@@ -208,3 +208,79 @@ def test_cli_validate_missing_file(capsys):
     assert ret == 2
     captured = capsys.readouterr()
     assert "error: Evidence file not found" in captured.err
+
+
+def test_cli_collect_auto_detects_single_device(tmp_path, capsys):
+    sample_file = FIXTURES_DIR / "sample_evidence.json"
+    from aegis.schema import EvidenceReport
+    report = EvidenceReport.from_json(sample_file.read_text(encoding="utf-8"))
+
+    dev = AdbDevice(serial="AUTO_SERIAL_123", state="device")
+    out_dir = str(tmp_path / "autodetect_run")
+
+    with (
+        patch("aegis.cli.list_devices", return_value=[dev]),
+        patch("aegis.cli.collect_device_evidence", return_value=report) as mock_collect,
+    ):
+        ret = main(["collect", "--yes", "--out", out_dir])
+        assert ret == 0
+        mock_collect.assert_called_once_with(serial="AUTO_SERIAL_123", consent_given=True)
+        captured = capsys.readouterr()
+        assert "Auto-selected connected device:" in captured.out
+        assert "Collection successful!" in captured.out
+        assert (Path(out_dir) / "evidence.json").is_file()
+        assert (Path(out_dir) / "report.html").is_file()
+
+
+def test_cli_collect_no_devices_helpful_message(capsys):
+    with patch("aegis.cli.list_devices", return_value=[]):
+        ret = main(["collect"])
+        assert ret == 2
+        captured = capsys.readouterr()
+        assert "error: No Android devices detected via ADB" in captured.err
+
+
+def test_cli_demo_command(tmp_path, capsys):
+    with patch("aegis.cli.open_in_browser") as mock_open:
+        ret = main(["demo"])
+        assert ret == 0
+        captured = capsys.readouterr()
+        assert "Demo report generated successfully!" in captured.out
+        mock_open.assert_called_once()
+
+
+def test_cli_menu_quit(capsys):
+    with patch("builtins.input", return_value="0"):
+        ret = main(["menu"])
+        assert ret == 0
+        captured = capsys.readouterr()
+        assert "Welcome to AEGIS" in captured.out
+        assert "Goodbye!" in captured.out
+
+
+def test_cli_menu_routes_to_doctor(capsys):
+    with (
+        patch("builtins.input", return_value="3"),
+        patch("aegis.cli.find_adb", return_value="/usr/bin/adb"),
+        patch("aegis.cli.get_adb_version", return_value="Android Debug Bridge version 1.0.41"),
+        patch("aegis.cli.list_devices", return_value=[]),
+    ):
+        ret = main(["menu"])
+        assert ret == 0
+        captured = capsys.readouterr()
+        assert "Welcome to AEGIS" in captured.out
+        assert "ADB Binary: /usr/bin/adb" in captured.out
+
+
+def test_cli_devices_with_model_label(capsys):
+    devs = [AdbDevice(serial="DEV_M11", state="device")]
+    with (
+        patch("aegis.cli.list_devices", return_value=devs),
+        patch("aegis.cli._get_device_model_label", return_value="Samsung Galaxy M11 (Android 12)"),
+    ):
+        ret = main(["devices"])
+        assert ret == 0
+        captured = capsys.readouterr()
+        assert "DEV_M11\tdevice" in captured.out
+        assert "Samsung Galaxy M11 (Android 12)" in captured.out
+

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AEGIS Phase One Convenience Runner Script
+# AEGIS Developer Runner Script
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,32 +21,93 @@ AEGIS_CMD=("${PYTHON}" -m aegis.cli)
 
 print_help() {
     cat <<EOF
-AEGIS Quick Runner
-Usage: ./run.sh [command] [args...]
 
-Commands:
-  doctor              Check local environment, Python, and ADB status
-  devices             List connected ADB devices (safe read-only discovery)
+🛡️  AEGIS — Android Exploration, Guardrails, Intelligence & Security
+Developer Quick-Runner
+
+Usage: ./run.sh [command] [options]
+
+Core Commands:
+  menu                Launch interactive guided menu (easy mode for developers)
+  scan                Auto-detect phone, collect evidence, & open report in browser
+  collect [serial]    Collect evidence (auto-detects phone if only 1 is connected)
+  devices             List connected phones and check authorization status
+  doctor              Check host setup, Python, and Android Platform Tools (ADB)
+  demo                Preview a sample report with synthetic data (no phone needed)
+  report [file.json]  Generate HTML report (defaults to your latest collection)
+  validate [file]     Check evidence JSON against the schema
   test                Run unit test suite (pytest) and linter (ruff)
-  demo                Generate a self-contained sample HTML report using synthetic fixtures
-  collect <serial>    Run read-only collection against target device (output: ./reports/<serial>)
-  report <file.json>  Generate self-contained HTML report from an evidence JSON document
-  validate <file>     Validate an evidence JSON document against the schema
-  install             Install or update the package in editable mode with development dependencies
+  install             Install/update AEGIS in editable development mode
   help                Show this help message
 
-If no command is provided, 'doctor' and 'test' will run.
+Examples:
+  ./run.sh                      # Launch guided interactive menu
+  ./run.sh scan                 # One-step collection and report viewing
+  ./run.sh doctor               # Check your ADB setup
+  ./run.sh demo                 # Explore report UI without any phone
+
 EOF
 }
 
-COMMAND="${1:-all}"
+COMMAND="${1:-}"
+
+if [[ -z "${COMMAND}" ]]; then
+    if [[ -t 0 && -t 1 ]]; then
+        exec "${AEGIS_CMD[@]}" menu
+    else
+        exec "${AEGIS_CMD[@]}" scan
+    fi
+fi
 
 case "${COMMAND}" in
+    menu)
+        "${AEGIS_CMD[@]}" menu
+        ;;
     doctor)
         "${AEGIS_CMD[@]}" doctor
         ;;
     devices)
         "${AEGIS_CMD[@]}" devices
+        ;;
+    scan)
+        echo "Starting AEGIS scan (auto-detecting device)..."
+        "${AEGIS_CMD[@]}" collect --open "${@:2}"
+        ;;
+    collect)
+        if [[ $# -ge 2 ]]; then
+            SERIAL="$2"
+            OUT_DIR="${3:-}"
+            if [[ -n "${OUT_DIR}" ]]; then
+                "${AEGIS_CMD[@]}" collect --device "${SERIAL}" --out "${OUT_DIR}"
+            else
+                "${AEGIS_CMD[@]}" collect --device "${SERIAL}"
+            fi
+        else
+            # Auto-detect connected device
+            "${AEGIS_CMD[@]}" collect "${@:2}"
+        fi
+        ;;
+    report)
+        EVIDENCE="${2:-}"
+        OUT_HTML="${3:-}"
+        if [[ -n "${EVIDENCE}" && -n "${OUT_HTML}" ]]; then
+            "${AEGIS_CMD[@]}" report "${EVIDENCE}" --format html --out "${OUT_HTML}" --open
+        elif [[ -n "${EVIDENCE}" ]]; then
+            "${AEGIS_CMD[@]}" report "${EVIDENCE}" --format html --open
+        else
+            # Auto-detect latest report
+            "${AEGIS_CMD[@]}" report --open
+        fi
+        ;;
+    validate)
+        if [[ $# -ge 2 ]]; then
+            "${AEGIS_CMD[@]}" validate "$2"
+        else
+            "${AEGIS_CMD[@]}" validate
+        fi
+        ;;
+    demo)
+        "${AEGIS_CMD[@]}" demo --open
         ;;
     test)
         echo "Running pytest..."
@@ -54,57 +115,8 @@ case "${COMMAND}" in
         echo ""
         echo "Running ruff check..."
         "${PYTHON}" -m ruff check .
+        echo ""
         echo "All checks and tests passed!"
-        ;;
-    demo)
-        DEMO_OUT="${SCRIPT_DIR}/reports/demo"
-        mkdir -p "${DEMO_OUT}"
-        FIXTURE="${SCRIPT_DIR}/tests/fixtures/sample_evidence.json"
-        REPORT_OUT="${DEMO_OUT}/sample_report.html"
-
-        echo "Validating synthetic evidence fixture..."
-        "${AEGIS_CMD[@]}" validate "${FIXTURE}"
-        echo ""
-        echo "Generating standalone HTML report..."
-        "${AEGIS_CMD[@]}" report "${FIXTURE}" --format html --out "${REPORT_OUT}"
-        echo ""
-        echo "Demo report created successfully:"
-        echo "  ${REPORT_OUT}"
-        if [[ "$(uname)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
-            echo "Tip: Run 'open \"${REPORT_OUT}\"' to view the report in your browser."
-        fi
-        ;;
-    collect)
-        if [[ $# -lt 2 ]]; then
-            echo "Error: Device serial required." >&2
-            echo "Usage: ./run.sh collect <serial> [output_directory]" >&2
-            exit 2
-        fi
-        SERIAL="$2"
-        OUT_DIR="${3:-${SCRIPT_DIR}/reports/${SERIAL}}"
-        "${AEGIS_CMD[@]}" collect --device "${SERIAL}" --out "${OUT_DIR}"
-        ;;
-    report)
-        if [[ $# -lt 2 ]]; then
-            echo "Error: Evidence JSON path required." >&2
-            echo "Usage: ./run.sh report <path-to-evidence.json> [output_html]" >&2
-            exit 2
-        fi
-        EVIDENCE="$2"
-        OUT_HTML="${3:-}"
-        if [[ -n "${OUT_HTML}" ]]; then
-            "${AEGIS_CMD[@]}" report "${EVIDENCE}" --format html --out "${OUT_HTML}"
-        else
-            "${AEGIS_CMD[@]}" report "${EVIDENCE}" --format html
-        fi
-        ;;
-    validate)
-        if [[ $# -lt 2 ]]; then
-            echo "Error: Evidence JSON path required." >&2
-            echo "Usage: ./run.sh validate <path-to-evidence.json>" >&2
-            exit 2
-        fi
-        "${AEGIS_CMD[@]}" validate "$2"
         ;;
     install)
         echo "Installing AEGIS in editable mode with dev dependencies..."
@@ -113,21 +125,6 @@ case "${COMMAND}" in
         ;;
     help|--help|-h)
         print_help
-        ;;
-    all)
-        echo "=== Environment Preflight ==="
-        "${AEGIS_CMD[@]}" doctor
-        echo ""
-        echo "=== Running Automated Tests & Lint ==="
-        "${PYTHON}" -m pytest
-        "${PYTHON}" -m ruff check .
-        echo ""
-        echo "=== Generating Demo Report ==="
-        DEMO_OUT="${SCRIPT_DIR}/reports/demo"
-        mkdir -p "${DEMO_OUT}"
-        "${AEGIS_CMD[@]}" report "${SCRIPT_DIR}/tests/fixtures/sample_evidence.json" --format html --out "${DEMO_OUT}/sample_report.html"
-        echo ""
-        echo "AEGIS ready! Run './run.sh help' for command options."
         ;;
     *)
         echo "Unknown command: ${COMMAND}" >&2

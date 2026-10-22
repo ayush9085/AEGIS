@@ -87,6 +87,7 @@ class CollectionMetadata:
     host_os: str
     host_python: str
     host_adb_version: str | None = None
+    is_synthetic: bool = False
 
 
 @dataclass
@@ -157,6 +158,7 @@ class EvidenceReport:
             host_os=coll_data["host_os"],
             host_python=coll_data["host_python"],
             host_adb_version=coll_data.get("host_adb_version"),
+            is_synthetic=coll_data.get("is_synthetic", False),
         )
         device = DeviceContext(
             serial_redacted=dev_data["serial_redacted"],

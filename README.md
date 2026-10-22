@@ -67,41 +67,64 @@ pip install -e ".[dev]"
 
 ---
 
+---
+
 ## Usage Workflow
 
-### 1. Check Local Environment
+### 🚀 Easiest Quickstart (Guided Menu)
+Just run `./run.sh` or `aegis` in your terminal:
 ```bash
-aegis doctor
+./run.sh
+```
+This opens the guided developer launcher:
+```
+🛡️  Welcome to AEGIS
+   Android Security & Firmware Reconnaissance (v0.1.0)
+
+What would you like to do?
+  [1] 🚀 Scan connected phone   - Auto-detect, collect evidence & view report
+  [2] 📱 List connected devices - See connected phones and authorization status
+  [3] 🩺 Run environment doctor - Check ADB, Python, and system prerequisites
+  [4] 🧪 Preview demo report    - Explore report UI with sample data (no phone needed)
+  [5] 📖 Show command help     - View all commands, flags, and options
+  [0] 🚪 Exit
 ```
 
-### 2. Discover Attached Handsets
-```bash
-aegis devices
-```
-If your handset shows `unauthorized`, unlock the screen and accept the ADB debugging prompt on the device.
+---
 
-### 3. Collect Allowlisted Evidence
-Run an opt-in collection run for your specific device serial:
+### ⚡ Direct One-Step Scan
+Connect your Android phone via USB and run:
 ```bash
-aegis collect --device <SERIAL> --out ./reports/run-01
+./run.sh scan
 ```
-*AEGIS displays the full probe plan and prompts for confirmation before sending commands to the device.*
+AEGIS will automatically:
+1. Detect your connected phone and model
+2. Run all 15 read-only security & boot probes
+3. Save `evidence.json` and generate `report.html`
+4. Open the report directly in your browser
 
-To run non-interactively (for CI or automated pipelines):
+---
+
+### 🛠️ Individual Commands
+
 ```bash
-aegis collect --device <SERIAL> --out ./reports/run-01 --yes
+# 1. Check your setup & ADB
+./run.sh doctor
+
+# 2. See connected Android devices (with human-readable model & Android version)
+./run.sh devices
+
+# 3. Collect evidence (auto-detects phone if 1 is connected)
+./run.sh collect
+
+# 4. View sample report without a phone
+./run.sh demo
+
+# 5. Run test suite & linter
+./run.sh test
 ```
 
-### 4. Validate the Evidence Document
-```bash
-aegis validate ./reports/run-01/evidence.json
-```
-
-### 5. Generate a Self-Contained HTML Report
-```bash
-aegis report ./reports/run-01/evidence.json --format html --out ./reports/run-01/report.html
-```
-Open `./reports/run-01/report.html` in your browser. The report contains zero external scripts, fonts, or tracking beacons.
+*Advanced manual flags (e.g. `--device <serial>`, `--out <dir>`, `--yes`) are supported for scripting and CI pipelines.*
 
 ---
 

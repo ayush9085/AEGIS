@@ -28,10 +28,23 @@ def test_html_report_rendering():
     assert "Unprivileged ADB read-only inspection cannot verify hardware root of trust." in html_out
     assert "Not a one-click root" in html_out
 
+    # Provenance notice for synthetic fixture
+    assert "SYNTHETIC DEMO DATA — NOT COLLECTED FROM A PHYSICAL DEVICE" in html_out
+
     # Self-contained: No remote fonts or external scripts/CDNs
     assert "https://" not in html_out
     assert "http://" not in html_out
     assert "<script" not in html_out
+
+
+def test_html_report_real_device_provenance():
+    sample_path = FIXTURES_DIR / "sample_evidence.json"
+    report = EvidenceReport.from_json(sample_path.read_text(encoding="utf-8"))
+    report.collection.is_synthetic = False
+
+    html_out = render_html_report(report)
+    assert "SYNTHETIC DEMO DATA" not in html_out
+    assert "Real Device ADB Collection:" in html_out
 
 
 def test_html_report_xss_escaping():

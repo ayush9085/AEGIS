@@ -4,9 +4,10 @@
 
 | Target Platform / Device | Tier | Status in Phase One | Notes |
 | :--- | :--- | :--- | :--- |
-| **Generic Android (API 28–34)** | Tier 2 (Read-only inventory) | Supported | Standard AOSP system build and version properties queryable via allowlisted `getprop`. |
-| **Samsung Galaxy M11 (SM-M115F / variants)** | Tier 2 (Initial Target) | Implemented & Tested via Fixtures | Handset-specific build identifiers, CSC, and security patch are discovered dynamically. |
-| **Android Emulators (e.g. emulator-5554)** | Tier 2 (Read-only inventory) | Supported | Standard testing targets; standard serials recognized and displayed. |
+| **Xiaomi Redmi Note 13 5G (`2312DRAABI`, `gold`)** | Tier 2 (Physical Device) | **Verified Live (PASS)** | Tested on hardware running Android 15 (SDK 35), Kernel 6.6 GKI. 15/15 probes audited with 100% parity. |
+| **Generic Android (API 28–35)** | Tier 2 (Read-only inventory) | Supported | Standard AOSP system build and version properties queryable via allowlisted `getprop`. |
+| **Samsung Galaxy M11 (`SM-M115F` / variants)** | Tier 2 (Initial Target) | Implemented & Tested via Fixtures | Handset-specific build identifiers, CSC, and security patch are discovered dynamically. |
+| **Android Emulators (e.g. `emulator-5554`)** | Tier 2 (Read-only inventory) | Supported | Standard testing targets; standard serials recognized and displayed. |
 
 ## Support Tiers
 

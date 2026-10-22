@@ -86,6 +86,19 @@ def render_html_report(report: EvidenceReport) -> str:
     limitations_items = "".join(f"<li style='margin-bottom:6px;'>{_esc(lim)}</li>" for lim in r.limitations)
     nongoals_items = "".join(f"<li style='margin-bottom:6px;'>{_esc(ng)}</li>" for ng in r.non_goals)
 
+    if coll.is_synthetic:
+        provenance_banner = """
+        <div style="background:#fff3cd; border:2px solid #ffc107; color:#856404; padding:16px 20px; border-radius:8px; font-weight:700; font-size:1.05rem; text-align:center; margin-bottom:20px; letter-spacing:0.02em;">
+            ⚠️ SYNTHETIC DEMO DATA — NOT COLLECTED FROM A PHYSICAL DEVICE
+        </div>
+        """
+    else:
+        provenance_banner = f"""
+        <div style="background:#e8f4fd; border:2px solid #3b82f6; color:#1e40af; padding:14px 20px; border-radius:8px; font-size:0.95rem; margin-bottom:20px;">
+            <strong>Real Device ADB Collection:</strong> Recorded from active Android handset at <code>{_esc(coll.timestamp_utc)}</code>. This report records observable properties and does not certify device security.
+        </div>
+        """
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -249,6 +262,8 @@ def render_html_report(report: EvidenceReport) -> str:
             Schema v{_esc(r.schema_version)}
         </div>
     </header>
+
+    {provenance_banner}
 
     <div class="callout">
         <strong>Security & Ground-Truth Principle:</strong>
