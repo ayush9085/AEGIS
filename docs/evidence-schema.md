@@ -98,4 +98,4 @@ Every observation item must be assigned exactly one status from the controlled v
 
 ## 4. Synthetic Example Document
 
-See [tests/fixtures/sample_evidence.json](file:///Users/ayush9085/Documents/AEGIS/tests/fixtures/sample_evidence.json) for a complete, schema-compliant synthetic reference document.
+See [tests/fixtures/sample_evidence.json](../tests/fixtures/sample_evidence.json) for a complete, schema-compliant synthetic reference document.

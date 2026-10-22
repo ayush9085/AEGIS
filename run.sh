@@ -39,9 +39,11 @@ Core Commands:
   research [analyze]  Correlate evidence reports, build graph & evaluate rules
   evaluation [run]    Run research validation suite against ground-truth corpus
   demo                Preview a sample report with synthetic data (no phone needed)
+  demo-e2e            Run complete offline synthetic end-to-end demo and verify reproducibility
   report [file.json]  Generate HTML report (defaults to your latest collection)
   validate [file]     Check evidence JSON against the schema
   test                Run unit test suite (pytest) and linter (ruff)
+  build               Build sdist and wheel distribution packages
   install             Install/update AEGIS in editable development mode
   help                Show this help message
 
@@ -131,6 +133,9 @@ case "${COMMAND}" in
     demo)
         "${AEGIS_CMD[@]}" demo --open
         ;;
+    demo-e2e)
+        bash "${SCRIPT_DIR}/scripts/demo.sh"
+        ;;
     test)
         echo "Running pytest..."
         "${PYTHON}" -m pytest -v
@@ -139,6 +144,10 @@ case "${COMMAND}" in
         "${PYTHON}" -m ruff check .
         echo ""
         echo "All checks and tests passed!"
+        ;;
+    build)
+        echo "Building distribution packages..."
+        "${PYTHON}" -m build
         ;;
     install)
         echo "Installing AEGIS in editable mode with dev dependencies..."

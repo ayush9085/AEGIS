@@ -243,4 +243,11 @@ AEGIS (*Android Exploration, Ground-Truth Inspection & Security*) decouples devi
   6. **Reproducibility**: Verifies bit-for-bit serialization stability, ordering independence, and physical handset telemetry handling.
 - Metrics & Confusion Matrices: Exact categorical agreement rates, binary confusion matrices (precision, recall, F1) where ground truth applies, and 100% offline self-contained HTML evaluation report generation.
 
+### 16. Release Engineering & Open-Source Distribution Architecture
+- **Standardized Packaging**: `pyproject.toml` configuration conforming to PEP 517/621, providing entrypoint `aegis = "aegis.cli:main"`.
+- **Zero Runtime Dependencies**: Operates entirely using the Python 3.11/3.12 standard library (`hashlib`, `struct`, `zipfile`, `argparse`, `html`, `json`, `pathlib`, `subprocess`).
+- **End-to-End Synthetic Verification**: `scripts/demo.sh` provides an offline, self-verifying smoke test ensuring all subsystems (snapshots, diffs, research graph, and evaluation runner) operate seamlessly from a clean clone.
+- **Uniform CLI Interface**: Enforces consistent `--out` destinations, `--overwrite` protections, and `--format` (`terminal`, `json`, `html`) options across all subcommands.
+- **Privacy Hygiene Guardrails**: Rigorous local exclusions via `.gitignore` ensuring physical device observations and private tokens never leak into version control.
+
 

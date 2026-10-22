@@ -78,7 +78,7 @@ $$\text{Reproducibility Rate} = \frac{\text{Repeated Executions Yielding Identic
 ## 5. Adding New Ground-Truth Cases
 
 To add a new case to the corpus:
-1. Open [`src/aegis/evaluation/corpus.py`](file:///Users/ayush9085/Documents/AEGIS/src/aegis/evaluation/corpus.py).
+1. Open [`src/aegis/evaluation/corpus.py`](../src/aegis/evaluation/corpus.py).
 2. Instantiate an `EvaluationCase` with:
    - Unique, uppercase ID (e.g., `RULE-14-CUSTOM-TEST`).
    - Valid category (`normalization`, `graph_integrity`, `rule_evaluation`, `cross_source_correlation`, `security_robustness`, `reproducibility`).

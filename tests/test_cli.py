@@ -374,6 +374,16 @@ def test_cli_diff_terminal_and_formats(tmp_path, capsys):
     assert "<!DOCTYPE html>" in html_text
     assert "AEGIS Semantic Diff Report" in html_text
 
+    # Rejects existing without --overwrite
+    ret_reject = main(["diff", str(snap1), str(snap2), "--format", "html", "--out", str(diff_html_out)])
+    assert ret_reject == 2
+    captured = capsys.readouterr()
+    assert "already exists. Use --overwrite" in captured.err
+
+    # With --overwrite
+    ret_overwrite = main(["diff", str(snap1), str(snap2), "--format", "html", "--out", str(diff_html_out), "--overwrite"])
+    assert ret_overwrite == 0
+
 
 def test_cli_diff_cross_device_blocked_and_override(tmp_path, capsys):
     sample_file1 = FIXTURES_DIR / "sample_evidence.json"

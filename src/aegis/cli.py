@@ -123,6 +123,8 @@ Quickstart examples:
   aegis firmware inspect boot.img   Inspect Android boot image header & components
   aegis firmware inspect ./ota/     Inspect firmware directory or OTA zip archive
   aegis firmware report report.json --format html --open  Render visual HTML report
+  aegis research analyze ev.json snap.json --format html --open  Correlate evidence & render graph report
+  aegis evaluation run --format terminal  Run research validation & reproducibility suite
   aegis report                 Generate report for the most recent collection
   aegis demo --open            View a sample report with synthetic data (no phone needed)
         """,
@@ -236,6 +238,11 @@ Quickstart examples:
         "--open",
         action="store_true",
         help="Automatically open generated HTML diff report in your browser",
+    )
+    diff_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing destination file if it exists",
     )
 
     # report
@@ -1012,6 +1019,7 @@ def handle_diff(
     out_path: str | None = None,
     allow_different_devices: bool = False,
     open_report: bool = False,
+    overwrite: bool = False,
 ) -> int:
     """Compare two snapshots and output deterministic semantic differences."""
     b_file = Path(baseline_path)
@@ -1053,6 +1061,12 @@ def handle_diff(
         json_str = diff_res.to_json(indent=2)
         if out_path:
             dest = Path(out_path)
+            if dest.exists() and not overwrite:
+                print(
+                    _red(f"error: Destination file '{dest}' already exists. Use --overwrite to replace."),
+                    file=sys.stderr,
+                )
+                return 2
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(json_str, encoding="utf-8")
             print(_green(f"JSON diff written to: {dest}"))
@@ -1067,6 +1081,12 @@ def handle_diff(
             dest = Path(f"./reports/diff-{ts}.html")
         else:
             dest = Path(out_path)
+        if dest.exists() and not overwrite:
+            print(
+                _red(f"error: Destination file '{dest}' already exists. Use --overwrite to replace."),
+                file=sys.stderr,
+            )
+            return 2
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(html_content, encoding="utf-8")
         print(_green(f"\nHTML diff report generated: {dest}"))
@@ -1800,6 +1820,7 @@ def main(argv: list[str] | None = None) -> int:
             out_path=args.out,
             allow_different_devices=args.allow_different_devices,
             open_report=args.open,
+            overwrite=getattr(args, "overwrite", False),
         )
 
     if args.command == "firmware":

@@ -77,7 +77,7 @@ Fresh, independent read-only ADB commands were executed against the device and c
 
 ## 4. Report & Provenance Verification
 
-* **Real Device HTML Report**: Saved locally at [reports/real-device-20261022/report.html](file:///Users/ayush9085/Documents/AEGIS/reports/real-device-20261022/report.html).
+* **Real Device HTML Report**: Saved locally at `reports/real-device-20261022/report.html` (gitignored for privacy).
 * **Provenance**:
   * Real device report displays blue notice: `Real Device ADB Collection: Recorded from active Android handset at 2026-10-22T02:53:59Z`.
   * Demo report displays prominent yellow warning: `⚠️ SYNTHETIC DEMO DATA — NOT COLLECTED FROM A PHYSICAL DEVICE`.
