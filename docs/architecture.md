@@ -232,4 +232,15 @@ AEGIS (*Android Exploration, Ground-Truth Inspection & Security*) decouples devi
 - Fully documents prerequisites checked, satisfied, missing, and known limitations.
 - Explicit non-goal: Never outputs a binary "secure" or "compromised" verdict based on userspace or static evidence.
 
+### 15. Research Evaluation & Reproducibility Suite (`aegis.evaluation`)
+- Versioned evaluation schema (`0.1.0`) and ground-truth evaluation corpus (`0.1.0`).
+- 35 curated cases across 6 critical evaluation categories:
+  1. **Normalization & Schema**: Verifies parser contracts, schema rejection, and missing field handling.
+  2. **Graph Integrity**: Enforces referential integrity, duplicate node rejection, and acyclic deterministic serialization.
+  3. **Rule Evaluation**: Comprehensive positive, negative, boundary, and inapplicable test vectors across all 6 rules.
+  4. **Cross-Source Correlation**: Validates conflict detection, missing inventory logging, and artifact deduplication.
+  5. **Security & Robustness**: Proves strict HTML escaping, path traversal rejection, symlink escape defense, and zero network calls.
+  6. **Reproducibility**: Verifies bit-for-bit serialization stability, ordering independence, and physical handset telemetry handling.
+- Metrics & Confusion Matrices: Exact categorical agreement rates, binary confusion matrices (precision, recall, F1) where ground truth applies, and 100% offline self-contained HTML evaluation report generation.
+
 

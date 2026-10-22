@@ -16,6 +16,17 @@ from aegis import __version__
 from aegis.adb import find_adb, get_adb_version, list_devices
 from aegis.collectors.engine import collect_device_evidence, get_collection_plan
 from aegis.diff import IncomparableDeviceError, SemanticDiff, compare_snapshots
+from aegis.evaluation import (
+    EvaluationError,
+    EvaluationManifest,
+    EvaluationReport,
+    EvaluationRunner,
+    format_terminal_evaluation_report,
+    load_default_manifest,
+    load_evaluation_report,
+    render_evaluation_html_report,
+    save_evaluation_report,
+)
 from aegis.firmware.engine import inspect_firmware
 from aegis.firmware.models import (
     FirmwareReport,
@@ -429,6 +440,87 @@ Quickstart examples:
         help="Overwrite destination output file if it exists",
     )
     res_report.add_argument(
+        "--open",
+        action="store_true",
+        help="Automatically open HTML report in browser",
+    )
+
+    # evaluation
+    eval_parser = subparsers.add_parser(
+        "evaluation",
+        help="Research validation, evaluation, and reproducibility framework",
+    )
+    eval_subparsers = eval_parser.add_subparsers(
+        dest="evaluation_command", help="Evaluation actions"
+    )
+
+    # evaluation run
+    eval_run = eval_subparsers.add_parser(
+        "run", help="Run evaluation cases against AEGIS components and verify ground truth"
+    )
+    eval_run.add_argument(
+        "manifest_or_dataset",
+        nargs="?",
+        default=None,
+        metavar="PATH",
+        help="Path to evaluation manifest JSON (defaults to built-in ground-truth corpus)",
+    )
+    eval_run.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Destination JSON report file path (defaults to ./evaluation_reports/evaluation-<timestamp>.json)",
+    )
+    eval_run.add_argument(
+        "--format",
+        choices=["terminal", "json", "html"],
+        default="terminal",
+        help="Report output format (default: terminal)",
+    )
+    eval_run.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite destination output file if it exists",
+    )
+    eval_run.add_argument(
+        "--open",
+        action="store_true",
+        help="Automatically open HTML report in browser",
+    )
+
+    # evaluation validate
+    eval_validate = eval_subparsers.add_parser(
+        "validate", help="Validate an evaluation report or manifest JSON document against schema"
+    )
+    eval_validate.add_argument(
+        "report_file", metavar="PATH", help="Path to evaluation report or manifest JSON file"
+    )
+
+    # evaluation report
+    eval_report = eval_subparsers.add_parser(
+        "report", help="Render terminal, JSON, or HTML visual report from an evaluation report"
+    )
+    eval_report.add_argument(
+        "report_file", metavar="PATH", help="Path to evaluation report JSON file"
+    )
+    eval_report.add_argument(
+        "--format",
+        choices=["terminal", "json", "html"],
+        default="terminal",
+        help="Report output format (default: terminal)",
+    )
+    eval_report.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Output HTML report file path (default: <report_dir>/report.html)",
+    )
+    eval_report.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite destination output file if it exists",
+    )
+    eval_report.add_argument(
         "--open",
         action="store_true",
         help="Automatically open HTML report in browser",
@@ -1381,6 +1473,150 @@ def handle_research_report(
     return 0
 
 
+def handle_evaluation_run(
+    manifest_or_dataset: str | None = None,
+    out_path: str | None = None,
+    fmt: str = "terminal",
+    overwrite: bool = False,
+    open_report: bool = False,
+) -> int:
+    """Run evaluation cases, compare with ground truth, and generate a versioned report."""
+    runner = EvaluationRunner()
+
+    try:
+        if manifest_or_dataset:
+            p = Path(manifest_or_dataset)
+            if not p.is_file():
+                print(_red(f"error: Manifest file not found: {p}"), file=sys.stderr)
+                return 2
+            manifest = EvaluationManifest.from_json(p.read_text(encoding="utf-8"))
+        else:
+            manifest = load_default_manifest()
+    except (EvaluationError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed to load evaluation manifest: {exc}"), file=sys.stderr)
+        return 2
+
+    # Execute evaluation suite
+    report = runner.run_manifest(manifest)
+
+    # Determine destination output path
+    if out_path:
+        dest = Path(out_path)
+    else:
+        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        dest = Path("./evaluation_reports") / f"evaluation-{ts}.json"
+
+    # Save JSON report
+    try:
+        save_evaluation_report(report, dest, overwrite=overwrite)
+    except FileExistsError as exc:
+        print(_red(f"error: {exc}"), file=sys.stderr)
+        return 2
+
+    # Formatting
+    if fmt == "terminal":
+        print(format_terminal_evaluation_report(report))
+        print(_green(f"Evaluation report JSON saved: {dest}\n"))
+    elif fmt == "json":
+        print(report.to_json())
+    elif fmt == "html":
+        html_dest = dest.with_suffix(".html")
+        if html_dest.exists() and not overwrite:
+            print(
+                _red(f"error: Output destination '{html_dest}' already exists. Use --overwrite to replace."),
+                file=sys.stderr,
+            )
+            return 2
+        html_content = render_evaluation_html_report(report)
+        html_dest.write_text(html_content, encoding="utf-8")
+        print(_green(f"Evaluation HTML report generated: {html_dest}"))
+        print(f"👉 View in browser: {_bold(f'open {html_dest}')}\n")
+        if open_report:
+            open_in_browser(html_dest)
+
+    return 1 if report.metrics.failed > 0 else 0
+
+
+def handle_evaluation_validate(report_path: str) -> int:
+    """Validate an evaluation report or manifest JSON document against schema."""
+    path = Path(report_path)
+    if not path.is_file():
+        print(_red(f"error: File not found: {path}"), file=sys.stderr)
+        return 2
+
+    try:
+        content = path.read_text(encoding="utf-8")
+        raw_json = json.loads(content)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed to read/parse JSON: {exc}"), file=sys.stderr)
+        return 2
+
+    # Try evaluation report
+    try:
+        report = EvaluationReport.from_dict(raw_json)
+        print(_green(f"Validation passed: Valid AEGIS evaluation report (v{report.schema_version})"))
+        print(
+            f"Cases evaluated: {report.metrics.total_cases}, "
+            f"Passed: {report.metrics.passed}, "
+            f"Failed: {report.metrics.failed}, "
+            f"Pass Rate: {report.metrics.overall_pass_rate * 100:.1f}%, "
+            f"Reproducibility Hash: {report.reproducibility_hash[:16]}"
+        )
+        return 0
+    except EvaluationError as exc_report:
+        # Try evaluation manifest
+        try:
+            manifest = EvaluationManifest.from_dict(raw_json)
+            print(_green(f"Validation passed: Valid AEGIS evaluation manifest (v{manifest.schema_version})"))
+            print(f"Title: {manifest.title}, Cases: {len(manifest.cases)}")
+            return 0
+        except EvaluationError:
+            print(_red(f"error: Validation failed: {exc_report}"), file=sys.stderr)
+            return 2
+
+
+def handle_evaluation_report(
+    report_path: str,
+    fmt: str = "terminal",
+    out_file: str | None = None,
+    overwrite: bool = False,
+    open_report: bool = False,
+) -> int:
+    """Render terminal, JSON, or HTML visual report from a saved evaluation report."""
+    path = Path(report_path)
+    if not path.is_file():
+        print(_red(f"error: File not found: {path}"), file=sys.stderr)
+        return 2
+
+    try:
+        report = load_evaluation_report(path)
+    except (EvaluationError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed to load evaluation report: {exc}"), file=sys.stderr)
+        return 2
+
+    if fmt == "terminal":
+        print(format_terminal_evaluation_report(report))
+    elif fmt == "json":
+        print(report.to_json())
+    elif fmt == "html":
+        dest = Path(out_file) if out_file else path.with_suffix(".html")
+        if dest.exists() and not overwrite:
+            print(
+                _red(f"error: Output destination '{dest}' already exists. Use --overwrite to replace."),
+                file=sys.stderr,
+            )
+            return 2
+        html_content = render_evaluation_html_report(report)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(html_content, encoding="utf-8")
+        print(_green(f"Evaluation HTML report generated: {dest}"))
+        print(f"👉 View in browser: {_bold(f'open {dest}')}\n")
+        if open_report:
+            open_in_browser(dest)
+
+    return 0
+
+
 def handle_interactive_menu() -> int:
     """Present a friendly, guided menu for local developers."""
     show_menu = True
@@ -1399,14 +1635,15 @@ def handle_interactive_menu() -> int:
             print(f"  [{_cyan('6')}] ⚖️  {_bold('Compare snapshots')}     - Run deterministic semantic diff between two snapshots")
             print(f"  [{_cyan('7')}] 📦 {_bold('Inspect firmware')}      - Offline analysis of boot.img, sparse, OTA zip")
             print(f"  [{_cyan('8')}] 🔬 {_bold('Research engine')}       - Correlate evidence & boot-chain graph")
-            print(f"  [{_cyan('9')}] 📖 {_bold('Show command help')}     - View all commands, flags, and options")
+            print(f"  [{_cyan('9')}] 🧪 {_bold('Evaluation suite')}      - Run research validation & reproducibility tests")
+            print(f"  [{_cyan('10')}] 📖 {_bold('Show command help')}    - View all commands, flags, and options")
             print(f"  [{_cyan('0')}] 🚪 {_dim('Exit')}\n")
 
         try:
             prompt = (
-                f"Enter choice [{_bold('1')}-9, or 0 to exit]: "
+                f"Enter choice [{_bold('1')}-10, or 0 to exit]: "
                 if show_menu
-                else f"Enter next choice [{_bold('1')}-9, or 0 to exit] (Enter for menu): "
+                else f"Enter next choice [{_bold('1')}-10, or 0 to exit] (Enter for menu): "
             )
             choice = input(prompt).strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -1505,10 +1742,14 @@ def handle_interactive_menu() -> int:
                 handle_research_analyze(inputs, fmt="terminal")
             show_menu = False
         elif choice == "9":
+            print(_bold("\n🧪 AEGIS Research Validation & Evaluation Suite"))
+            handle_evaluation_run(manifest_or_dataset=None, out_path=None, fmt="terminal", overwrite=True, open_report=False)
+            show_menu = False
+        elif choice == "10":
             build_parser().print_help()
             show_menu = False
         else:
-            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-9, or 0 to exit.\n"))
+            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-10, or 0 to exit.\n"))
             show_menu = True
 
         if not is_interactive:
@@ -1600,6 +1841,29 @@ def main(argv: list[str] | None = None) -> int:
         if args.research_command == "report":
             return handle_research_report(
                 report_path=args.report_file,
+                out_file=args.out,
+                overwrite=args.overwrite,
+                open_report=args.open,
+            )
+
+    if args.command == "evaluation":
+        if not getattr(args, "evaluation_command", None):
+            parser.parse_args(["evaluation", "--help"])
+            return 0
+        if args.evaluation_command == "run":
+            return handle_evaluation_run(
+                manifest_or_dataset=args.manifest_or_dataset,
+                out_path=args.out,
+                fmt=args.format,
+                overwrite=args.overwrite,
+                open_report=args.open,
+            )
+        if args.evaluation_command == "validate":
+            return handle_evaluation_validate(report_path=args.report_file)
+        if args.evaluation_command == "report":
+            return handle_evaluation_report(
+                report_path=args.report_file,
+                fmt=args.format,
                 out_file=args.out,
                 overwrite=args.overwrite,
                 open_report=args.open,

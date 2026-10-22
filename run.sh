@@ -37,6 +37,7 @@ Core Commands:
   diff <snap1> <snap2> Run deterministic semantic diff between two snapshots
   firmware [inspect]  Offline analysis of boot.img, sparse, or OTA zip
   research [analyze]  Correlate evidence reports, build graph & evaluate rules
+  evaluation [run]    Run research validation suite against ground-truth corpus
   demo                Preview a sample report with synthetic data (no phone needed)
   report [file.json]  Generate HTML report (defaults to your latest collection)
   validate [file]     Check evidence JSON against the schema
@@ -104,6 +105,9 @@ case "${COMMAND}" in
         ;;
     research)
         "${AEGIS_CMD[@]}" research "${@:2}"
+        ;;
+    evaluation)
+        "${AEGIS_CMD[@]}" evaluation "${@:2}"
         ;;
     report)
         EVIDENCE="${2:-}"

@@ -13,6 +13,7 @@ def test_parser_has_expected_commands():
     assert parser.parse_args(["diff", "s1.json", "s2.json"]).command == "diff"
     assert parser.parse_args(["firmware", "inspect", "boot.img"]).command == "firmware"
     assert parser.parse_args(["research", "analyze", "e1.json"]).command == "research"
+    assert parser.parse_args(["evaluation", "run"]).command == "evaluation"
 
 
 def test_adb_device_model():

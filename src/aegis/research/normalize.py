@@ -7,11 +7,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+from aegis.diff import DIFF_FORMAT_VERSION
+from aegis.firmware.models import SUPPORTED_FIRMWARE_SCHEMA_VERSIONS
 from aegis.research.models import (
     NormalizedEvidence,
     ResearchCompatibilityError,
     ResearchValidationError,
 )
+from aegis.schema import SUPPORTED_SCHEMA_VERSIONS
+from aegis.snapshots import SUPPORTED_SNAPSHOT_VERSIONS
+
+SUPPORTED_DIFF_VERSIONS = {DIFF_FORMAT_VERSION, "0.1.0"}
 
 
 def compute_file_sha256(path: Path) -> str:
@@ -70,6 +76,10 @@ def _normalize_device_evidence(
     file_hash: str | None,
 ) -> tuple[dict[str, Any], list[NormalizedEvidence]]:
     schema_version = str(data.get("schema_version", "0.1.0"))
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ResearchCompatibilityError(
+            f"Unsupported device evidence schema version '{schema_version}'. Supported: {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+        )
     device = data.get("device", {})
     collection = data.get("collection", {})
     is_synth = bool(collection.get("is_synthetic", False) or device.get("is_synthetic", False))
@@ -130,6 +140,10 @@ def _normalize_snapshot(
     file_hash: str | None,
 ) -> tuple[dict[str, Any], list[NormalizedEvidence]]:
     schema_version = str(data.get("snapshot_format_version", data.get("source_schema_version", "0.1.0")))
+    if schema_version not in SUPPORTED_SNAPSHOT_VERSIONS:
+        raise ResearchCompatibilityError(
+            f"Unsupported snapshot format version '{schema_version}'. Supported: {sorted(SUPPORTED_SNAPSHOT_VERSIONS)}"
+        )
     content_hash = str(data.get("content_hash", ""))
     device = data.get("device", {})
     prov_dict = data.get("provenance", {})
@@ -191,6 +205,10 @@ def _normalize_semantic_diff(
     file_hash: str | None,
 ) -> tuple[dict[str, Any], list[NormalizedEvidence]]:
     schema_version = str(data.get("diff_version", data.get("diff_schema_version", "0.1.0")))
+    if schema_version not in SUPPORTED_DIFF_VERSIONS:
+        raise ResearchCompatibilityError(
+            f"Unsupported semantic diff version '{schema_version}'. Supported: {sorted(SUPPORTED_DIFF_VERSIONS)}"
+        )
     b_hash = str(data.get("baseline_hash", data.get("baseline_snapshot_hash", "")))[:8]
     c_hash = str(data.get("current_hash", data.get("current_snapshot_hash", "")))[:8]
     comparability = str(data.get("comparability_state", data.get("device_comparability", "unknown")))
@@ -250,6 +268,10 @@ def _normalize_firmware_report(
     file_hash: str | None,
 ) -> tuple[dict[str, Any], list[NormalizedEvidence]]:
     schema_version = str(data.get("schema_version", "0.1.0"))
+    if schema_version not in SUPPORTED_FIRMWARE_SCHEMA_VERSIONS:
+        raise ResearchCompatibilityError(
+            f"Unsupported firmware report schema version '{schema_version}'. Supported: {sorted(SUPPORTED_FIRMWARE_SCHEMA_VERSIONS)}"
+        )
     target_name = str(data.get("target_name", ""))
     target_type = str(data.get("target_type", ""))
     ref_id = file_hash[:8] if file_hash else Path(source_ref).stem
