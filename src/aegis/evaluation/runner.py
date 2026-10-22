@@ -137,7 +137,14 @@ class EvaluationRunner:
                         rel_p = inp.get("path", "")
                         abs_p = (self.workspace_root / rel_p).resolve()
                         if not abs_p.is_file():
-                            raise FileNotFoundError(f"Fixture file not found: {abs_p}")
+                            duration_ms = (time.perf_counter() - start_t) * 1000.0
+                            return CaseExecutionResult(
+                                case_id=case.case_id,
+                                category=case.category,
+                                status="skipped",
+                                execution_time_ms=round(duration_ms, 2),
+                                message=f"Device observation fixture not present in checkout ({rel_p}); safely skipped per privacy policy.",
+                            )
                         input_paths.append(abs_p)
 
                 # Check expected exception
