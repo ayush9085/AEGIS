@@ -36,6 +36,7 @@ Core Commands:
   snapshot [file]     Create versioned snapshot with canonical SHA-256 hash
   diff <snap1> <snap2> Run deterministic semantic diff between two snapshots
   firmware [inspect]  Offline analysis of boot.img, sparse, or OTA zip
+  research [analyze]  Correlate evidence reports, build graph & evaluate rules
   demo                Preview a sample report with synthetic data (no phone needed)
   report [file.json]  Generate HTML report (defaults to your latest collection)
   validate [file]     Check evidence JSON against the schema
@@ -100,6 +101,9 @@ case "${COMMAND}" in
         ;;
     firmware)
         "${AEGIS_CMD[@]}" firmware "${@:2}"
+        ;;
+    research)
+        "${AEGIS_CMD[@]}" research "${@:2}"
         ;;
     report)
         EVIDENCE="${2:-}"

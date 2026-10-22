@@ -25,6 +25,12 @@ from aegis.redaction import redact_serial
 from aegis.reports.diff_html import render_html_diff_report
 from aegis.reports.firmware_html import render_html_firmware_report
 from aegis.reports.html import render_html_report
+from aegis.reports.research_html import render_html_research_report
+from aegis.research import (
+    ResearchError,
+    ResearchReport,
+    analyze_research_inputs,
+)
 from aegis.schema import EvidenceReport, validate_evidence_dict
 from aegis.snapshots import (
     SnapshotError,
@@ -346,6 +352,83 @@ Quickstart examples:
         help="Output HTML report file path (default: <report_dir>/report.html)",
     )
     fw_report.add_argument(
+        "--open",
+        action="store_true",
+        help="Automatically open HTML report in browser",
+    )
+
+    # research
+    res_parser = subparsers.add_parser(
+        "research",
+        help="Offline evidence-linked boot-chain research and correlation engine",
+    )
+    res_subparsers = res_parser.add_subparsers(
+        dest="research_command", help="Research analysis actions"
+    )
+
+    # research analyze
+    res_analyze = res_subparsers.add_parser(
+        "analyze", help="Correlate evidence reports, build evidence graph, and evaluate research rules"
+    )
+    res_analyze.add_argument(
+        "inputs", nargs="+", metavar="PATH", help="Path(s) to AEGIS JSON reports or directories"
+    )
+    res_analyze.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Output report destination path (defaults to ./research_reports/research-<timestamp>.json)",
+    )
+    res_analyze.add_argument(
+        "--format",
+        choices=["terminal", "json", "html"],
+        default="terminal",
+        help="Report output format (default: terminal)",
+    )
+    res_analyze.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite destination output file if it exists",
+    )
+    res_analyze.add_argument(
+        "--open",
+        action="store_true",
+        help="Automatically open HTML report in browser",
+    )
+
+    # research validate
+    res_validate = res_subparsers.add_parser(
+        "validate", help="Validate a research report JSON document against schema"
+    )
+    res_validate.add_argument(
+        "report_file", metavar="PATH", help="Path to research report JSON file"
+    )
+
+    # research report
+    res_report = res_subparsers.add_parser(
+        "report", help="Generate an HTML visual report from a research report JSON"
+    )
+    res_report.add_argument(
+        "report_file", metavar="PATH", help="Path to research report JSON file"
+    )
+    res_report.add_argument(
+        "--format",
+        choices=["html"],
+        default="html",
+        help="Report output format (default: html)",
+    )
+    res_report.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Output HTML report file path (default: <report_dir>/report.html)",
+    )
+    res_report.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite destination output file if it exists",
+    )
+    res_report.add_argument(
         "--open",
         action="store_true",
         help="Automatically open HTML report in browser",
@@ -1106,6 +1189,198 @@ def handle_firmware_report(
     return 0
 
 
+def print_terminal_research_report(report: ResearchReport) -> None:
+    """Format and print an evidence-linked research report to stdout."""
+    r = report
+    s = r.summary
+    print(_bold("\n🔬 AEGIS Evidence-Linked Research Intelligence Report"))
+    print("─" * 60)
+    print(f"  Evaluated:    {r.evaluated_at_utc}")
+    print(f"  Sources:      {s.get('total_sources', 0)} loaded ({s.get('total_evidence_items', 0)} normalized items)")
+    print(f"  Graph:        {s.get('graph_nodes_count', 0)} nodes, {s.get('graph_edges_count', 0)} edges (referential integrity verified)")
+    print(f"  Evaluations:  {s.get('total_evaluations', 0)}")
+    print(f"  Claims:       {s.get('total_claims', 0)}")
+    print(f"  Conflicts:    {s.get('total_conflicts', 0)}")
+    print("─" * 60)
+
+    if r.claims:
+        print(_bold("\nDerived Research Claims:"))
+        for c in r.claims:
+            cert_color = _green if "supported" in c.certainty or "observed" in c.certainty else (_yellow if "insufficient" in c.certainty else _red)
+            print(f"  • {_bold(c.title)} [{cert_color(c.certainty)}]")
+            print(f"    {c.summary}")
+            if c.supporting_evidence_ids:
+                print(f"    Evidence ({len(c.supporting_evidence_ids)}): {', '.join(c.supporting_evidence_ids[:4])}{'...' if len(c.supporting_evidence_ids) > 4 else ''}")
+
+    if r.evaluations:
+        print(_bold("\nRule Evaluations Summary:"))
+        for e in r.evaluations:
+            outcome_color = _green if e.outcome == "supported" else (_yellow if e.outcome in ("insufficient_evidence", "not_applicable") else _red)
+            print(f"  [{outcome_color(e.outcome.upper())}] {e.rule_id} ({e.certainty}): {e.conclusion}")
+
+    if r.conflicts:
+        print(_red(f"\n⚠️  {len(r.conflicts)} Cross-Source Conflicts Detected:"))
+        for cf in r.conflicts:
+            print(_red(f"  • {cf['key']}: divergent values across {len(cf.get('evidence_sources', []))} sources"))
+
+    if r.missing_evidence_inventory:
+        print(_yellow(f"\nMissing / Unobserved Baseline Properties ({len(r.missing_evidence_inventory)}):"))
+        print(_yellow(f"  {', '.join(r.missing_evidence_inventory[:8])}"))
+
+    print()
+
+
+def handle_research_analyze(
+    inputs: list[str],
+    out_path: str | None = None,
+    fmt: str = "terminal",
+    overwrite: bool = False,
+    open_report: bool = False,
+) -> int:
+    """Correlate evidence reports, build graph, and evaluate research rules."""
+    input_paths = [Path(p) for p in inputs]
+
+    try:
+        report = analyze_research_inputs(input_paths)
+    except (ResearchError, OSError, ValueError, RuntimeError) as exc:
+        print(_red(f"error: Research analysis failed: {exc}"), file=sys.stderr)
+        return 2
+
+    if fmt == "json":
+        if out_path:
+            dest = Path(out_path).resolve()
+        else:
+            ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            dest = Path(f"./research_reports/research-{ts}.json").resolve()
+
+        if dest.exists() and not overwrite:
+            print(
+                _red(f"error: Output destination '{dest}' already exists. Use --overwrite to replace."),
+                file=sys.stderr,
+            )
+            return 2
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
+        try:
+            temp_file.write_text(report.to_json(indent=2), encoding="utf-8")
+            temp_file.replace(dest)
+        except OSError as exc:
+            if temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            print(_red(f"error: Failed to write JSON research report: {exc}"), file=sys.stderr)
+            return 2
+
+        print(_green(f"Research report written to: {dest}"))
+        return 0
+
+    elif fmt == "html":
+        if out_path:
+            dest = Path(out_path).resolve()
+        else:
+            ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            dest = Path(f"./research_reports/research-{ts}.html").resolve()
+
+        if dest.exists() and not overwrite:
+            print(
+                _red(f"error: Output destination '{dest}' already exists. Use --overwrite to replace."),
+                file=sys.stderr,
+            )
+            return 2
+
+        html_content = render_html_research_report(report)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
+        try:
+            temp_file.write_text(html_content, encoding="utf-8")
+            temp_file.replace(dest)
+        except OSError as exc:
+            if temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            print(_red(f"error: Failed to write HTML research report: {exc}"), file=sys.stderr)
+            return 2
+
+        print(_green(f"\nHTML research report generated: {dest}"))
+        print(f"👉 View in browser: {_bold(f'open {dest}')}\n")
+        if open_report:
+            open_in_browser(dest)
+        return 0
+
+    else:
+        print_terminal_research_report(report)
+        if out_path:
+            dest = Path(out_path).resolve()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(report.to_json(indent=2), encoding="utf-8")
+            print(_green(f"JSON report saved to: {dest}"))
+        return 0
+
+
+def handle_research_validate(report_path: str) -> int:
+    """Validate a research report JSON document against schema and referential integrity."""
+    path = Path(report_path)
+    if not path.is_file():
+        print(_red(f"error: Research report file not found: {path}"), file=sys.stderr)
+        return 2
+
+    try:
+        content = path.read_text(encoding="utf-8")
+        report = ResearchReport.from_json(content)
+    except (ResearchError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Research validation failed: {exc}"), file=sys.stderr)
+        return 2
+
+    print(_green(f"Validation passed: Valid AEGIS research report (v{report.schema_version})"))
+    print(
+        f"Evaluations: {report.summary.get('total_evaluations', 0)}, "
+        f"Claims: {report.summary.get('total_claims', 0)}, "
+        f"Graph: {report.summary.get('graph_nodes_count', 0)} nodes, "
+        f"{report.summary.get('graph_edges_count', 0)} edges"
+    )
+    return 0
+
+
+def handle_research_report(
+    report_path: str,
+    out_file: str | None = None,
+    overwrite: bool = False,
+    open_report: bool = False,
+) -> int:
+    """Render HTML visual report from a saved research JSON report."""
+    path = Path(report_path)
+    if not path.is_file():
+        print(_red(f"error: Research report file not found: {path}"), file=sys.stderr)
+        return 2
+
+    try:
+        content = path.read_text(encoding="utf-8")
+        report = ResearchReport.from_json(content)
+    except (ResearchError, json.JSONDecodeError, OSError) as exc:
+        print(_red(f"error: Failed to load research report: {exc}"), file=sys.stderr)
+        return 2
+
+    html_content = render_html_research_report(report)
+    if out_file:
+        dest = Path(out_file)
+    else:
+        dest = path.with_suffix(".html")
+
+    if dest.exists() and not overwrite:
+        print(
+            _red(f"error: Output destination '{dest}' already exists. Use --overwrite to replace."),
+            file=sys.stderr,
+        )
+        return 2
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(html_content, encoding="utf-8")
+    print(_green(f"Research report successfully generated: {dest}"))
+    print(f"👉 View in browser: {_bold(f'open {dest}')}\n")
+    if open_report:
+        open_in_browser(dest)
+    return 0
+
+
 def handle_interactive_menu() -> int:
     """Present a friendly, guided menu for local developers."""
     show_menu = True
@@ -1123,14 +1398,15 @@ def handle_interactive_menu() -> int:
             print(f"  [{_cyan('5')}] 📸 {_bold('Create snapshot')}       - Preserve evidence bundle into a versioned snapshot")
             print(f"  [{_cyan('6')}] ⚖️  {_bold('Compare snapshots')}     - Run deterministic semantic diff between two snapshots")
             print(f"  [{_cyan('7')}] 📦 {_bold('Inspect firmware')}      - Offline analysis of boot.img, sparse, OTA zip")
-            print(f"  [{_cyan('8')}] 📖 {_bold('Show command help')}     - View all commands, flags, and options")
+            print(f"  [{_cyan('8')}] 🔬 {_bold('Research engine')}       - Correlate evidence & boot-chain graph")
+            print(f"  [{_cyan('9')}] 📖 {_bold('Show command help')}     - View all commands, flags, and options")
             print(f"  [{_cyan('0')}] 🚪 {_dim('Exit')}\n")
 
         try:
             prompt = (
-                f"Enter choice [{_bold('1')}-8, or 0 to exit]: "
+                f"Enter choice [{_bold('1')}-9, or 0 to exit]: "
                 if show_menu
-                else f"Enter next choice [{_bold('1')}-8, or 0 to exit] (Enter for menu): "
+                else f"Enter next choice [{_bold('1')}-9, or 0 to exit] (Enter for menu): "
             )
             choice = input(prompt).strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -1208,10 +1484,31 @@ def handle_interactive_menu() -> int:
                 print(_yellow("No firmware path provided."))
             show_menu = False
         elif choice == "8":
+            print(_bold("\n🔬 Offline Evidence-Linked Research Correlation"))
+            print("Enter paths to evidence reports (device evidence, snapshots, diffs, or firmware reports):")
+            try:
+                res_in = input("Report paths (space separated, or Enter for fixtures): ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nOperation cancelled.")
+                show_menu = False
+                continue
+            if not res_in:
+                f1 = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "sample_evidence.json"
+                if not f1.is_file():
+                    f1 = Path("./tests/fixtures/sample_evidence.json")
+                if f1.is_file():
+                    handle_research_analyze([str(f1)], fmt="terminal")
+                else:
+                    print(_yellow("Sample fixtures not found."))
+            else:
+                inputs = res_in.split()
+                handle_research_analyze(inputs, fmt="terminal")
+            show_menu = False
+        elif choice == "9":
             build_parser().print_help()
             show_menu = False
         else:
-            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-8, or 0 to exit.\n"))
+            print(_yellow(f"\nInvalid option '{choice}'. Please select 1-9, or 0 to exit.\n"))
             show_menu = True
 
         if not is_interactive:
@@ -1283,6 +1580,28 @@ def main(argv: list[str] | None = None) -> int:
             return handle_firmware_report(
                 report_path=args.report_file,
                 out_file=args.out,
+                open_report=args.open,
+            )
+
+    if args.command == "research":
+        if not getattr(args, "research_command", None):
+            parser.parse_args(["research", "--help"])
+            return 0
+        if args.research_command == "analyze":
+            return handle_research_analyze(
+                inputs=args.inputs,
+                out_path=args.out,
+                fmt=args.format,
+                overwrite=args.overwrite,
+                open_report=args.open,
+            )
+        if args.research_command == "validate":
+            return handle_research_validate(report_path=args.report_file)
+        if args.research_command == "report":
+            return handle_research_report(
+                report_path=args.report_file,
+                out_file=args.out,
+                overwrite=args.overwrite,
                 open_report=args.open,
             )
 

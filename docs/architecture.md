@@ -160,3 +160,76 @@ AEGIS (*Android Exploration, Ground-Truth Inspection & Security*) decouples devi
 - Reconciles finding counts across `observed`, `unsupported`, `inaccessible`, `not_applicable`, `unknown`, and `error`.
 - Produces fully offline, self-contained HTML reports with zero CDN dependencies and strict XSS escaping on all untrusted artifact metadata.
 
+---
+
+## Phase Four Subsystems (Evidence-Linked Boot-Chain Research Engine)
+
+```text
+       +-------------------------------------------------------------+
+       | Multi-Source Input Loader (device, snapshots, diffs, fw)    |
+       +------------------------------+------------------------------+
+                                      |
+                                      v
+       +-------------------------------------------------------------+
+       | Evidence Normalization Layer (aegis.research.normalize)     |
+       |  - Extracts NormalizedEvidence with stable deterministic IDs|
+       |  - Preserves provenance (synthetic vs physical vs firmware) |
+       +------------------------------+------------------------------+
+                                      |
+              +-----------------------+-----------------------+
+              |                                               |
+              v                                               v
++-------------------------------+               +-------------------------------+
+| Cross-Source Conflict Detector|               | Missing Evidence Inventory    |
+| (detects divergent values)    |               | (catalogs observation gaps)   |
++-------------+-----------------+               +---------------+---------------+
+              |                                               |
+              +-----------------------+-----------------------+
+                                      |
+                                      v
+       +-------------------------------------------------------------+
+       | Explainable Rule Engine Registry (aegis.research.rules)     |
+       |  - Boot-chain completeness (RULE-BOOT-CHAIN-COMPLETE)       |
+       |  - Snapshot diff drift (RULE-DIFF-BOOT-DRIFT)               |
+       |  - Firmware boot validity (RULE-FW-BOOT-VALID)              |
+       |  - Cross-source consistency (RULE-CROSS-SOURCE-CONSISTENCY) |
+       |  - Provenance boundary guard (RULE-PROVENANCE-BOUNDARY)     |
+       |  - Observation surface limits (RULE-INACCESSIBLE-LIMIT)     |
+       +------------------------------+------------------------------+
+                                      |
+                                      v
+       +-------------------------------------------------------------+
+       | Evidence Graph Builder (aegis.research.graph)               |
+       |  - Nodes: device, observation, artifact, claim, rule        |
+       |  - Edges: observed_on, contained_in, supports, contradicts  |
+       |  - Enforces strict referential integrity & deterministic ord|
+       +------------------------------+------------------------------+
+                                      |
+                                      v
+       +-------------------------------------------------------------+
+       | Research Report & HTML Renderer (research_html.py)          |
+       |  - Versioned ResearchReport schema (0.1.0)                  |
+       |  - Explainable certainty categories (no fake percentages)   |
+       |  - Zero external CDN dependencies & strict XSS escaping     |
+       +-------------------------------------------------------------+
+```
+
+### 12. Normalization & Provenance (`aegis.research.normalize`)
+- Converts Phase 1 `EvidenceReport`, Phase 2 `EvidenceSnapshot`, Phase 2 `SemanticDiff`, and Phase 3 `FirmwareReport` into a unified `NormalizedEvidence` representation.
+- Preserves origin schema versions, content hashes, collector/parser IDs, timestamps, caveats, and synthetic/physical provenance tags.
+- Missing fields remain missing or explicitly unobserved; never populated with heuristic guesses.
+
+### 13. Deterministic Evidence Graph (`aegis.research.graph`)
+- Serializable bipartite-style directed multigraph.
+- Validates referential integrity upon build and load: every edge endpoint must exist in the node set, with zero dangling edges or duplicate IDs.
+- Typed relationships: `observed_on`, `contained_in`, `derived_from`, `compared_with`, `supports`, `contradicts`, `requires`, `related_to`.
+- Guarantees deterministic serialization and node/edge ordering.
+
+### 14. Explainable Rule Registry (`aegis.research.rules`)
+- Deterministic rules that evaluate evidence completeness, consistency, drift, and structural validity.
+- Every evaluation produces an explainable outcome: `supported`, `contradicted`, `insufficient_evidence`, `not_applicable`, `incomparable`, `error`.
+- Categorical certainty: `directly_observed`, `strongly_supported`, `tentatively_supported`, `insufficient_evidence`, `conflicting_evidence`. No fabricated probability percentages.
+- Fully documents prerequisites checked, satisfied, missing, and known limitations.
+- Explicit non-goal: Never outputs a binary "secure" or "compromised" verdict based on userspace or static evidence.
+
+

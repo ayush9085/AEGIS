@@ -287,32 +287,117 @@ Launch the interactive developer menu and select option `7) Inspect firmware art
 
 ---
 
+---
+
+## Phase Four: Evidence-Linked Boot-Chain Research Engine
+
+AEGIS Phase Four adds a deterministic, offline, explainable research engine that correlates evidence from live device reconnaissance (Phase 1), evidence snapshots and semantic diffs (Phase 2), and offline firmware intelligence (Phase 3).
+
+### Mission & Explainability Principles
+
+AEGIS is an open research and reconnaissance toolkit, not a black-box security scanner:
+* **Traceability**: Every derived research claim links directly back to the exact supporting and contradicting raw evidence IDs that produced it.
+* **Prerequisite Accounting**: Every rule evaluation records exactly which prerequisites were checked, which were satisfied, and which were missing.
+* **Conflict Preservation**: When two sources disagree (e.g. build release or model mismatches between live telemetry and firmware), AEGIS preserves both values and records an active conflict rather than arbitrarily favoring one source.
+* **Transparent Uncertainty**: The engine explicitly catalogues what *cannot* be concluded due to missing or inaccessible observation surfaces.
+* **No False Precision**: Avoids arbitrary percentages or probabilistic security scores. Uses defensible, documented certainty classifications.
+* **Explicit Non-Goal**: Never outputs a binary "secure" or "compromised" verdict based on userspace properties or static images alone.
+
+---
+
+### Certainty Classifications
+
+| Certainty Level | Criteria & Meaning |
+| :--- | :--- |
+| **`directly_observed`** | Direct, authoritative point measurement present with `observed` status in source evidence. |
+| **`strongly_supported`** | All required rule prerequisites are satisfied, and conclusions are corroborated without contradiction. |
+| **`tentatively_supported`** | Supported by single-source findings or partial indicators with documented assumptions. |
+| **`insufficient_evidence`** | Critical prerequisites are missing or properties are `inaccessible`/`unsupported`, preventing conclusive analysis. |
+| **`conflicting_evidence`** | Active contradictions or divergent values detected across two or more compared sources. |
+
+---
+
+### Core Research Rule Registry
+
+* **`RULE-BOOT-CHAIN-COMPLETE`**: Evaluates completeness of core Android bootloader and verified-boot properties (`ro.boot.verifiedbootstate`, `ro.boot.flash.locked`, `ro.bootloader`, etc.).
+* **`RULE-DIFF-BOOT-DRIFT`**: Evaluates semantic diffs to detect boot-chain or build property state transitions across snapshot collection points.
+* **`RULE-FW-BOOT-VALID`**: Validates structural integrity and AOSP header version compliance (v0 through v4) in firmware boot and vendor_boot artifacts.
+* **`RULE-CROSS-SOURCE-CONSISTENCY`**: Correlates comparable build IDs, OS versions, and model strings between live device telemetry and firmware container metadata.
+* **`RULE-PROVENANCE-BOUNDARY`**: Flags comparisons crossing synthetic mock data and physical handset boundaries without explicit research overrides.
+* **`RULE-INACCESSIBLE-EVIDENCE-LIMIT`**: Identifies properties blocked by OS permissions or SELinux policies, documenting the exact perimeter of the observation surface.
+
+---
+
+### Evidence Graph Topology
+
+The research engine compiles a deterministic, serializable graph with strict referential integrity (zero dangling edges):
+* **Node Types**: `device`, `observation`, `firmware_artifact`, `firmware_component`, `snapshot`, `diff`, `claim`, `rule_evaluation`.
+* **Relationship Types**: `observed_on`, `contained_in`, `derived_from`, `compared_with`, `supports`, `contradicts`, `requires`, `related_to`.
+
+---
+
+### CLI Workflows & Examples
+
+#### 1. Analyze & Correlate Evidence Sources
+```bash
+# Terminal summary output across multiple reports or directories
+./run.sh research analyze /path/to/evidence.json /path/to/firmware_report.json
+
+# Structured JSON research report
+./run.sh research analyze /path/to/reports/ --format json --out research_reports/research.json
+
+# Interactive, self-contained HTML report with graph overview
+./run.sh research analyze /path/to/reports/ --format html --out research_reports/research.html
+```
+
+#### 2. Validate Research Report Schema & Graph Integrity
+```bash
+# Validate schema version, summary counts, and graph referential integrity
+./run.sh research validate research_reports/research.json
+```
+
+#### 3. Render HTML Report from Existing JSON
+```bash
+# Generate self-contained HTML report from previously saved research JSON
+./run.sh research report research_reports/research.json --format html --out research_reports/research.html
+```
+
+#### 4. Interactive Developer Menu
+Launch the interactive menu and select option `8) Research engine`:
+```bash
+./run.sh
+```
+
+---
+
 ## Development & Testing
 
 Run all unit tests and linting locally:
 ```bash
-# Run complete test suite (127 automated tests)
+# Run complete test suite (162 automated tests)
 python3 -m pytest
 
 # Run Ruff linter
 python3 -m ruff check .
 ```
 
-All 127 automated tests run against synthetic fixtures and programmatic byte buffers without requiring a physical handset, live ADB daemon, or proprietary firmware dumps.
+All 162 automated tests run against synthetic fixtures, programmatically generated byte buffers, and mocked environments without requiring a physical handset, live ADB daemon, or proprietary firmware dumps.
 
 ---
 
 ## Repository Map
 
-* `src/aegis/`: Core package containing CLI, ADB helpers, schema, snapshots, diff engine, and reporting engines.
+* `src/aegis/`: Core package containing CLI, ADB helpers, schema, snapshots, diff engine, firmware engine, and research engine.
+  * `src/aegis/research/`: Offline evidence-linked research engine.
+    * `engine.py`: Multi-source correlation coordinator and summary reconciler.
+    * `normalize.py`: Unified evidence normalization layer for Phase 1, 2, and 3 reports.
+    * `graph.py`: Evidence graph builder with referential integrity validation.
+    * `rules.py`: Explainable rule registry with prerequisite accounting.
+    * `models.py`: Versioned `ResearchReport` schema (`0.1.0`), graph nodes/edges, and claims.
+  * `src/aegis/reports/research_html.py`: Self-contained HTML research report generator with strict XSS escaping.
   * `src/aegis/firmware/`: Offline firmware intelligence package.
-    * `engine.py`: Coordinator for single-file and directory inventorying with symlink and size limits.
-    * `detector.py`: Conservative signature-based format sniffer.
-    * `models.py`: Versioned `FirmwareReport` schema (`0.1.0`), findings models, and validation logic.
-    * `parsers/`: Modular format parsers (`boot_img.py`, `sparse.py`, `zip_archive.py`, `props.py`).
-  * `src/aegis/reports/firmware_html.py`: Self-contained, responsive HTML reporter with strict XSS escaping.
-* `tests/`: Comprehensive test suites (127 tests) covering CLI, collectors, snapshots, diffs, firmware parsers, firmware engine, schema, redaction, and HTML reports.
-* `docs/architecture.md`: Architectural design, subsystems breakdown, and firmware engine dataflow.
+* `tests/`: Comprehensive test suites (162 tests) covering CLI, collectors, snapshots, diffs, firmware parsers, firmware engine, research engine, research graph, research rules, schema, and HTML reports.
+* `docs/architecture.md`: Architectural design, subsystems breakdown, and research engine dataflow.
 * `docs/threat-model.md`: Security boundary, threat analysis, and risk mitigations.
 * `docs/device-support.md`: Device compatibility matrix and research scope.
 * `docs/evidence-schema.md`: Data dictionary, schema versioning, and status vocabulary.

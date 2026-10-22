@@ -15,6 +15,7 @@ htmlcov/
 /reports/
 /snapshots/
 /firmware_reports/
+/research_reports/
 *.adb-log
 *.device-dump
 .env
