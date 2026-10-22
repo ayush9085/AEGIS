@@ -298,14 +298,14 @@ def handle_devices() -> int:
 
 def select_target_device(requested_serial: str | None) -> str | None:
     """Resolve target device serial: requested, auto-selected, or interactive choice."""
+    if requested_serial:
+        return requested_serial
+
     try:
         devices = list_devices()
     except (FileNotFoundError, RuntimeError) as exc:
         print(_red(f"error: {exc}"), file=sys.stderr)
         return None
-
-    if requested_serial:
-        return requested_serial
 
     if not devices:
         print(_red("error: No Android devices detected via ADB."), file=sys.stderr)

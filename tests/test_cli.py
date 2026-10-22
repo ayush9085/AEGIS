@@ -284,3 +284,15 @@ def test_cli_devices_with_model_label(capsys):
         assert "DEV_M11\tdevice" in captured.out
         assert "Samsung Galaxy M11 (Android 12)" in captured.out
 
+
+def test_cli_collect_with_explicit_serial_when_adb_missing_on_host(capsys):
+    with (
+        patch("aegis.cli.find_adb", return_value=None),
+        patch("builtins.input", return_value="n"),
+    ):
+        ret = main(["collect", "--device", "TEST_DEV", "--out", "./mock_out"])
+        assert ret == 1
+        captured = capsys.readouterr()
+        assert "Target Handset:" in captured.out
+        assert "Collection aborted by user." in captured.err
+
